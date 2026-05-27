@@ -1,0 +1,24 @@
+# ─── Sensitive / Environment ───
+db.php
+db_pdo.php
+
+# ─── Logs (runtime, non tracciare) ───
+config/logs/*
+!config/logs/.gitkeep
+
+# ─── Uploads (user-generated content) ───
+uploads/news/*
+!uploads/news/.gitkeep
+
+# ─── IDE & OS ───
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# ─── Extracted / temporary ───
+extracted_admin_styles.css

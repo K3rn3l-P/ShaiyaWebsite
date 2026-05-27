@@ -1,0 +1,7 @@
+{
+  "api_url": "http://127.0.0.1/task_scheduler_worker_api.php",
+  "worker_id": "worker-main",
+  "hmac_secret": "CHANGE_ME_WITH_A_LONG_RANDOM_SECRET",
+  "poll_limit": 10,
+  "sql_connection_string": "Server=127.0.0.1;Database=PS_WebSite;User ID=sa;Password=YOUR_PASSWORD;TrustServerCertificate=True;Encrypt=False"
+}

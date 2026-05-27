@@ -1,0 +1,70 @@
+Options -Indexes
+ServerSignature Off
+
+<IfModule mod_headers.c>
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set X-Frame-Options "DENY"
+    Header always set Referrer-Policy "strict-origin-when-cross-origin"
+    Header always set Permissions-Policy "geolocation=(), microphone=(), camera=()"
+    Header always set X-Permitted-Cross-Domain-Policies "none"
+    Header always unset X-Powered-By
+
+    <If "%{HTTPS} == 'on'">
+        Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains"
+    </If>
+</IfModule>
+
+<FilesMatch "^\.(env|git|htaccess)">
+    Require all denied
+</FilesMatch>
+
+<FilesMatch "^(composer\.(json|lock)|phpunit\.xml|\.megaignore)$">
+    Require all denied
+</FilesMatch>
+
+<FilesMatch "^(db|db_pdo)\.example\.php$">
+    Require all denied
+</FilesMatch>
+
+<FilesMatch "^(db|db_pdo)\.php$">
+    Require all denied
+</FilesMatch>
+
+<Files "task_scheduler_worker_api.php">
+    <RequireAny>
+        Require ip 127.0.0.0/8
+        Require ip ::1
+    </RequireAny>
+</Files>
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # Blocca accesso a dotfiles/dot-directories (es. .github, .env), eccetto ACME challenge
+    RewriteRule "(^|/)\.(?!well-known/)" - [F,L]
+
+    # Canonical root: /index.php -> / (solo richieste GET/HEAD)
+    RewriteCond %{REQUEST_METHOD} ^(?:GET|HEAD)$
+    RewriteCond %{THE_REQUEST} \s/+index\.php(?:[\s?]|$) [NC]
+    RewriteRule ^index\.php$ / [R=301,L]
+
+    # Canonical URLs: /page.php -> /page (solo richieste GET/HEAD)
+    RewriteCond %{REQUEST_METHOD} ^(?:GET|HEAD)$
+    RewriteCond %{THE_REQUEST} \s/+([^.\s?/]+)\.php(?:[\s?]|$) [NC]
+    RewriteCond %{DOCUMENT_ROOT}/%1.php -f
+    RewriteRule ^([^.]+)\.php$ /$1 [R=301,L]
+
+    # Internal rewrite: /page -> /page.php (if file exists and no real file/dir matched)
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteCond %{DOCUMENT_ROOT}/$1.php -f
+    RewriteRule ^([^.]+)$ $1.php [L,QSA]
+</IfModule>
+
+<FilesMatch "\.(sql|ini|log|bak|old|dist)$">
+    Require all denied
+</FilesMatch>
+
+<FilesMatch "\.(md|markdown)$">
+    Require all denied
+</FilesMatch>
