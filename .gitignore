@@ -17,6 +17,7 @@ htdocs.zip
 # ─── Syncthing (non tracciare) ───
 syncthing*
 .stfolder
+.stversions
 
 # ─── IDE & OS ───
 .vscode/
