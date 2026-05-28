@@ -12,6 +12,7 @@ uploads/news/*
 
 # ─── Build artifacts (non tracciare) ───
 htdocs/*
+htdocs.zip
 
 # ─── IDE & OS ───
 .vscode/
