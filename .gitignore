@@ -10,6 +10,9 @@ config/logs/*
 uploads/news/*
 !uploads/news/.gitkeep
 
+# ─── Build artifacts (non tracciare) ───
+htdocs/*
+
 # ─── IDE & OS ───
 .vscode/
 .idea/
