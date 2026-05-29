@@ -49,7 +49,7 @@ $hasFilter     = $filterMobId > 0 || $filterMobName !== '' || $filterMapId > 0;
 // --- Dropdown mappe ---
 $mapOptions = [];
 try {
-    $mapStmt = $pdoAdmin->query("SELECT DISTINCT m.MapID, mn.MapName FROM PS_GameDefs.dbo.Mobs m LEFT JOIN PS_GameDefs.dbo.MapNames mn ON mn.MapID = m.MapID ORDER BY m.MapID ASC");
+    $mapStmt = $pdoAdmin->query("SELECT DISTINCT m.MapID, mn.MapName FROM PS_GameDefs.dbo.Mobs m LEFT JOIN PS_GameDefs.dbo.MapNames mn ON mn.MapID = m.MapID WHERE m.MapID IS NOT NULL ORDER BY m.MapID ASC");
     if ($mapStmt) $mapOptions = $mapStmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Throwable $e) {}
 
@@ -66,7 +66,7 @@ foreach ($changelogEntries as $cl) {
     if (!isset($changelogByMap[$clMapId])) {
         $changelogByMap[$clMapId] = [
             'map_id'   => $clMapId,
-            'map_name' => $clMapId > 0 ? ($mapNameLookup[$clMapId] ?? 'Map ' . $clMapId) : 'Mappa sconosciuta',
+            'map_name' => $clMapId > 0 ? ($mapNameLookup[$clMapId] ?? 'Map ' . $clMapId) : 'Unknown map',
             'entries'  => [],
         ];
     }
@@ -276,13 +276,17 @@ $filterQs = http_build_query(array_filter([
 <div style="max-width: 1300px;">
 
     <!-- Header (senza badge — ora nel FAB) -->
-    <div style="margin-bottom: 28px;">
-        <h2 style="color: #e8c881; font-size: 22px; margin: 0 0 4px 0;">
-            <i class="fas fa-dragon" style="margin-right: 10px; opacity: 0.8;"></i>Drops Editor
-        </h2>
-        <p style="color: #555; font-size: 13px; margin: 0;">
-            Modifica Grade e DropRate in <code style="color:#777;">PS_GameDefs.dbo.MobItems</code> — DropRate% = raw / 100000.
-        </p>
+    <div style="margin-bottom: 28px; display:flex; justify-content:space-between; align-items:flex-start;">
+        <div>
+            <h2 style="color: #e8c881; font-size: 22px; margin: 0 0 4px 0;">
+                <i class="fas fa-dragon" style="margin-right: 10px; opacity: 0.8;"></i>Drops Editor
+            </h2>
+            <p style="color: #555; font-size: 13px; margin: 0;">
+                Edit Grade and DropRate in <code style="color:#777;">PS_GameDefs.dbo.MobItems</code> — DropRate% = raw / 100000.
+            </p>
+        </div>
+        <!-- Indicatore stato sessione (aggiornato da JS keep-alive) -->
+        <span id="ka-status" style="font-size:11px; color:#333; margin-top:4px; transition:color 0.4s;"></span>
     </div>
 
     <!-- Filtri -->
@@ -295,12 +299,12 @@ $filterQs = http_build_query(array_filter([
             </div>
             <div style="display: flex; flex-direction: column; gap: 6px; flex: 1 1 180px;">
                 <label style="color: #888; font-size: 11px; text-transform: uppercase; letter-spacing: 1px;">Mob Name</label>
-                <input type="text" name="mob_name" class="char-input" value="<?php echo htmlspecialchars($filterMobName); ?>" placeholder="Ricerca parziale..." style="background: rgba(0,0,0,0.3); border-color: #333; color: #fff; height: 38px;">
+                <input type="text" name="mob_name" class="char-input" value="<?php echo htmlspecialchars($filterMobName); ?>" placeholder="Partial search..." style="background: rgba(0,0,0,0.3); border-color: #333; color: #fff; height: 38px;">
             </div>
             <div style="display: flex; flex-direction: column; gap: 6px; flex: 0 0 200px;">
-                <label style="color: #888; font-size: 11px; text-transform: uppercase; letter-spacing: 1px;">Mappa</label>
+                <label style="color: #888; font-size: 11px; text-transform: uppercase; letter-spacing: 1px;">Map</label>
                 <select name="map_id" class="char-input" style="background: rgba(0,0,0,0.5); border: 1px solid #333; color: #fff; height: 38px; padding: 0 10px; border-radius: 4px; appearance: none;">
-                    <option value="">— Tutte —</option>
+                    <option value="">— All —</option>
                     <?php foreach ($mapOptions as $m): ?>
                     <option value="<?php echo (int) $m['MapID']; ?>" <?php echo $filterMapId === (int) $m['MapID'] ? 'selected' : ''; ?>>
                         <?php echo htmlspecialchars($m['MapName'] ?? ('Map ' . $m['MapID'])); ?> (<?php echo (int) $m['MapID']; ?>)
@@ -308,7 +312,7 @@ $filterQs = http_build_query(array_filter([
                     <?php endforeach; ?>
                 </select>
             </div>
-            <button type="submit" class="btn-action" style="height: 38px; padding: 0 24px; white-space: nowrap;"><i class="fas fa-search" style="margin-right: 8px;"></i>CERCA</button>
+            <button type="submit" class="btn-action" style="height: 38px; padding: 0 24px; white-space: nowrap;"><i class="fas fa-search" style="margin-right: 8px;"></i>SEARCH</button>
             <?php if ($hasFilter): ?>
             <a href="/admin?view=drops_editor" class="btn-action" style="height: 38px; padding: 0 18px; background: rgba(255,255,255,0.04); border-color: rgba(255,255,255,0.1); color: #888; display: flex; align-items: center; text-decoration: none;"><i class="fas fa-times" style="margin-right: 6px;"></i>Reset</a>
             <?php endif; ?>
@@ -318,13 +322,13 @@ $filterQs = http_build_query(array_filter([
     <?php if (!$hasFilter): ?>
     <div style="text-align: center; padding: 80px 0; color: #444;">
         <i class="fas fa-dragon" style="font-size: 48px; margin-bottom: 20px; opacity: 0.15;"></i><br>
-        <p style="font-size: 15px;">Usa i filtri per cercare mob e modificare i drop rate.</p>
+        <p style="font-size: 15px;">Use the filters above to search mobs and edit their drop rates.</p>
     </div>
 
     <?php elseif ($totalRows === 0): ?>
     <div style="text-align: center; padding: 60px 0; color: #444;">
         <i class="fas fa-search" style="font-size: 36px; margin-bottom: 16px; opacity: 0.2;"></i><br>
-        <p>Nessun risultato per i filtri selezionati.</p>
+        <p>No results for the selected filters.</p>
     </div>
 
     <?php else: ?>
@@ -370,7 +374,7 @@ $filterQs = http_build_query(array_filter([
             </div>
             <span class="pct-display" style="color: #555; font-size: 12px; text-align: center;"><?php echo $dropPct; ?>%</span>
             <div style="text-align: center;">
-                <button type="submit" title="Salva modifiche"
+                <button type="submit" title="Save changes"
                     style="background: rgba(72,187,120,0.1); border: 1px solid rgba(72,187,120,0.25); color: #48bb78; border-radius: 4px; padding: 5px 14px; font-size: 11px; cursor: pointer; height: 32px; text-transform: uppercase; letter-spacing: 1px; white-space: nowrap;">
                     SAVE
                 </button>
@@ -398,7 +402,7 @@ $filterQs = http_build_query(array_filter([
     <!-- Range Update -->
     <div style="background: rgba(255,255,255,0.02); border: 1px solid rgba(231,76,60,0.15); border-radius: 8px; padding: 24px 28px;">
         <h4 style="color: #e74c3c; margin: 0 0 6px 0; font-size: 14px; text-transform: uppercase; letter-spacing: 1px;"><i class="fas fa-layer-group" style="margin-right: 8px;"></i>Range Update</h4>
-        <p style="color: #555; font-size: 12px; margin: 0 0 20px 0;">Aggiorna Grade e DropRate per tutti i mob in un range di MobID con un dato ItemOrder.</p>
+        <p style="color: #555; font-size: 12px; margin: 0 0 20px 0;">Update Grade and DropRate for all mobs in a MobID range with a given ItemOrder.</p>
         <form method="POST" action="/admin_actions" id="form-range-update">
             <input type="hidden" name="action"               value="drops_update_range">
             <input type="hidden" name="csrf_token"           value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>">
@@ -413,7 +417,7 @@ $filterQs = http_build_query(array_filter([
                 <div style="display: flex; flex-direction: column; gap: 6px;"><label style="color: #888; font-size: 11px; text-transform: uppercase; letter-spacing: 1px;">ItemOrder (1-9)</label><input type="number" name="item_order" min="1" max="9" required style="width: 80px; background: rgba(0,0,0,0.4); border: 1px solid #333; color: #fff; border-radius: 4px; padding: 7px 10px; font-size: 13px; height: 38px;"></div>
                 <div style="display: flex; flex-direction: column; gap: 6px;"><label style="color: #888; font-size: 11px; text-transform: uppercase; letter-spacing: 1px;">Grade</label><input type="number" name="grade" min="0" required style="width: 100px; background: rgba(0,0,0,0.4); border: 1px solid #333; color: #e8c881; border-radius: 4px; padding: 7px 10px; font-size: 13px; height: 38px;"></div>
                 <div style="display: flex; flex-direction: column; gap: 6px;"><label style="color: #888; font-size: 11px; text-transform: uppercase; letter-spacing: 1px;">DropRate (raw)</label><input type="number" name="drop_rate" min="0" required style="width: 120px; background: rgba(0,0,0,0.4); border: 1px solid #333; color: #3498db; border-radius: 4px; padding: 7px 10px; font-size: 13px; height: 38px;"></div>
-                <button type="submit" style="background: rgba(231,76,60,0.12); border: 1px solid rgba(231,76,60,0.3); color: #e74c3c; border-radius: 4px; padding: 0 22px; font-size: 12px; cursor: pointer; height: 38px; text-transform: uppercase; letter-spacing: 1px; white-space: nowrap;"><i class="fas fa-bolt" style="margin-right: 6px;"></i>APPLICA RANGE</button>
+                <button type="submit" style="background: rgba(231,76,60,0.12); border: 1px solid rgba(231,76,60,0.3); color: #e74c3c; border-radius: 4px; padding: 0 22px; font-size: 12px; cursor: pointer; height: 38px; text-transform: uppercase; letter-spacing: 1px; white-space: nowrap;"><i class="fas fa-bolt" style="margin-right: 6px;"></i>APPLY RANGE</button>
             </div>
         </form>
     </div>
@@ -436,15 +440,15 @@ $filterQs = http_build_query(array_filter([
     <!-- Sub 2: Export SQL (visibile solo con mappa selezionata) -->
     <?php if ($filterMapId > 0): ?>
     <div class="fab-sub">
-        <span class="fab-label">Esporta SQL — <?php echo htmlspecialchars($currentMapName); ?></span>
-        <a class="fab-icon-btn" href="/admin?view=drops_editor&export=sql&map_id=<?php echo $filterMapId; ?>" title="Scarica SQL per questa mappa" id="fab-btn-export">
+        <span class="fab-label">Export SQL — <?php echo htmlspecialchars($currentMapName); ?></span>
+        <a class="fab-icon-btn" href="/admin?view=drops_editor&export=sql&map_id=<?php echo $filterMapId; ?>" title="Download SQL for this map" id="fab-btn-export">
             <i class="fas fa-file-download"></i>
         </a>
     </div>
     <?php else: ?>
     <div class="fab-sub">
-        <span class="fab-label" style="opacity:0.45;">Esporta SQL — seleziona una mappa</span>
-        <span class="fab-icon-btn fab-disabled" title="Seleziona prima una mappa dai filtri">
+        <span class="fab-label" style="opacity:0.45;">Export SQL — select a map first</span>
+        <span class="fab-icon-btn fab-disabled" title="Select a map from the filters first">
             <i class="fas fa-file-download"></i>
         </span>
     </div>
@@ -466,7 +470,7 @@ $filterQs = http_build_query(array_filter([
         <div style="display:flex; justify-content:space-between; align-items:center; padding:20px 24px; border-bottom:1px solid rgba(255,255,255,0.06);">
             <div>
                 <h3 style="color:#e8c881; margin:0 0 4px 0; font-size:16px;"><i class="fas fa-history" style="margin-right:10px;"></i>Session Changes</h3>
-                <p style="color:#555; font-size:12px; margin:0;">Ultime 24h — <?php echo $changelogCount; ?> modifiche. Clic sulla riga per andare al mob. UNDO ripristina il valore precedente.</p>
+                <p style="color:#555; font-size:12px; margin:0;">Last 24h — <?php echo $changelogCount; ?> change<?php echo $changelogCount !== 1 ? 's' : ''; ?>. Click a row to navigate to the mob. UNDO restores the previous value.</p>
             </div>
             <button id="btn-changelog-close" style="background:none; border:none; color:#555; font-size:20px; cursor:pointer; padding:4px 8px;">&#x2715;</button>
         </div>
@@ -475,7 +479,7 @@ $filterQs = http_build_query(array_filter([
             <?php if (empty($changelogByMap)): ?>
             <div style="text-align:center; padding:60px 0; color:#444;">
                 <i class="fas fa-clipboard" style="font-size:36px; opacity:0.2; margin-bottom:16px; display:block;"></i>
-                Nessuna modifica in questa sessione.
+                No changes in this session.
             </div>
             <?php else: ?>
 
@@ -502,7 +506,7 @@ $filterQs = http_build_query(array_filter([
                         <?php endif; ?>
                     </div>
                     <div style="display:flex; align-items:center; gap:8px;">
-                        <span style="color:#555; font-size:11px; background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.06); border-radius:10px; padding:2px 10px;"><?php echo $gCount; ?> modifica<?php echo $gCount !== 1 ? 'he' : ''; ?></span>
+                        <span style="color:#555; font-size:11px; background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.06); border-radius:10px; padding:2px 10px;"><?php echo $gCount; ?> change<?php echo $gCount !== 1 ? 's' : ''; ?></span>
                         <i class="fas fa-chevron-down cl-chevron"></i>
                     </div>
                 </div>
@@ -512,10 +516,10 @@ $filterQs = http_build_query(array_filter([
                 <table style="width:100%; border-collapse:collapse;">
                     <thead>
                         <tr>
-                            <th style="text-align:left; padding:6px 10px; color:#444; font-size:10px; text-transform:uppercase; letter-spacing:1px; font-weight:400; border-bottom:1px solid rgba(255,255,255,0.04);">Ora</th>
+                            <th style="text-align:left; padding:6px 10px; color:#444; font-size:10px; text-transform:uppercase; letter-spacing:1px; font-weight:400; border-bottom:1px solid rgba(255,255,255,0.04);">Time</th>
                             <th style="text-align:left; padding:6px 10px; color:#444; font-size:10px; text-transform:uppercase; letter-spacing:1px; font-weight:400; border-bottom:1px solid rgba(255,255,255,0.04);">MobID</th>
-                            <th style="text-align:left; padding:6px 10px; color:#444; font-size:10px; text-transform:uppercase; letter-spacing:1px; font-weight:400; border-bottom:1px solid rgba(255,255,255,0.04);">Mob</th>
-                            <th style="text-align:center; padding:6px 10px; color:#444; font-size:10px; text-transform:uppercase; letter-spacing:1px; font-weight:400; border-bottom:1px solid rgba(255,255,255,0.04);">Ord</th>
+                            <th style="text-align:left; padding:6px 10px; color:#444; font-size:10px; text-transform:uppercase; letter-spacing:1px; font-weight:400; border-bottom:1px solid rgba(255,255,255,0.04);">Mob Name</th>
+                            <th style="text-align:center; padding:6px 10px; color:#444; font-size:10px; text-transform:uppercase; letter-spacing:1px; font-weight:400; border-bottom:1px solid rgba(255,255,255,0.04);">Order</th>
                             <th style="text-align:center; padding:6px 10px; color:#444; font-size:10px; text-transform:uppercase; letter-spacing:1px; font-weight:400; border-bottom:1px solid rgba(255,255,255,0.04);">Grade</th>
                             <th style="text-align:center; padding:6px 10px; color:#444; font-size:10px; text-transform:uppercase; letter-spacing:1px; font-weight:400; border-bottom:1px solid rgba(255,255,255,0.04);">DropRate</th>
                             <th style="border-bottom:1px solid rgba(255,255,255,0.04);"></th>
@@ -556,7 +560,7 @@ $filterQs = http_build_query(array_filter([
                                 <input type="hidden" name="drop_filter_mob_name" value="<?php echo htmlspecialchars($filterMobName); ?>">
                                 <input type="hidden" name="drop_filter_map_id"   value="<?php echo $filterMapId; ?>">
                                 <input type="hidden" name="drop_filter_page"     value="<?php echo $filterPage; ?>">
-                                <button type="submit" onclick="return confirm('Annullare modifica su MobID <?php echo (int)$cl['MobID']; ?>?');"
+                                <button type="submit" onclick="return confirm('Undo change on MobID <?php echo (int)$cl['MobID']; ?>?');"
                                     style="background:rgba(231,76,60,0.08); border:1px solid rgba(231,76,60,0.2); color:#e74c3c; border-radius:4px; padding:3px 10px; font-size:11px; cursor:pointer; white-space:nowrap;">UNDO</button>
                             </form>
                             <?php endif; ?>
@@ -580,7 +584,7 @@ $filterQs = http_build_query(array_filter([
                 <input type="hidden" name="drop_filter_mob_id"   value="<?php echo $filterMobId; ?>">
                 <input type="hidden" name="drop_filter_mob_name" value="<?php echo htmlspecialchars($filterMobName); ?>">
                 <input type="hidden" name="drop_filter_map_id"   value="<?php echo $filterMapId; ?>">
-                <button type="submit" onclick="return confirm('Svuotare il changelog di sessione?');"
+                <button type="submit" onclick="return confirm('Clear all session changes?');"
                     style="background:rgba(231,76,60,0.1); border:1px solid rgba(231,76,60,0.25); color:#e74c3c; border-radius:6px; padding:8px 20px; font-size:12px; cursor:pointer; text-transform:uppercase; letter-spacing:1px;">
                     <i class="fas fa-trash-alt" style="margin-right:6px;"></i>Clear All
                 </button>
@@ -663,6 +667,43 @@ $filterQs = http_build_query(array_filter([
         }
     }
 
+    /* ── Keep-alive: sessione + CSRF sync ogni 8 min ──────────
+       OWASP: per-session token è accettabile. Il keep-alive
+       mantiene viva la sessione PHP (gc_maxlifetime 7200s) e
+       sincronizza il token su tutti i form della pagina.
+    ─────────────────────────────────────────────────────────── */
+    var kaStatus = document.getElementById('ka-status');
+
+    function dropsKeepAlive() {
+        fetch('/admin?csrf_refresh=1', { credentials: 'same-origin' })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.ok && data.csrf_token) {
+                    // Aggiorna TUTTI i [name="csrf_token"] sulla pagina e nel modal
+                    document.querySelectorAll('[name="csrf_token"]').forEach(function(inp) {
+                        inp.value = data.csrf_token;
+                    });
+                    if (kaStatus) {
+                        kaStatus.textContent = '● session active';
+                        kaStatus.style.color = '#48bb78';
+                        setTimeout(function() {
+                            kaStatus.style.color = '#333';
+                            setTimeout(function() { kaStatus.textContent = ''; }, 600);
+                        }, 2500);
+                    }
+                }
+            })
+            .catch(function() {
+                if (kaStatus) {
+                    kaStatus.textContent = '⚠ session expired — reload the page';
+                    kaStatus.style.color = '#e74c3c';
+                }
+            });
+    }
+
+    // Prima chiamata dopo 8 min, poi ogni 8 min
+    setInterval(dropsKeepAlive, 8 * 60 * 1000);
+
     /* ── Live update % ─────────────────────────────────────── */
     document.querySelectorAll('.drop-rate-input').forEach(function (inp) {
         inp.addEventListener('input', function () {
@@ -678,7 +719,7 @@ $filterQs = http_build_query(array_filter([
             var min = this.querySelector('[name=mob_id_min]').value;
             var max = this.querySelector('[name=mob_id_max]').value;
             var ord = this.querySelector('[name=item_order]').value;
-            if (!confirm('Aggiornare MobID ' + min + '-' + max + ' ItemOrder ' + ord + '?\nAzione irreversibile.')) e.preventDefault();
+            if (!confirm('Update MobID ' + min + '-' + max + ' (ItemOrder ' + ord + ')?\nThis action cannot be undone.')) e.preventDefault();
         });
     }
 })();

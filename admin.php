@@ -1,6 +1,7 @@
 <?php
 require_once 'security_bootstrap.php';
 appApplySecurityHeaders();
+ini_set('session.gc_maxlifetime', 7200); // admin: sessione server-side 2h
 appInitSession();
 ob_start();
 require_once 'db.php';
@@ -655,6 +656,17 @@ if (strtoupper($_GET['view'] ?? '') === 'DROPS_EDITOR'
     && ($_GET['export'] ?? '') === 'sql'
     && $userStatus === 16) {
     include __DIR__ . '/adm-panel/drops_export.php';
+    exit;
+}
+
+// === CSRF Keep-Alive endpoint — risposta JSON, nessun HTML ===
+if (($_GET['csrf_refresh'] ?? '') === '1' && $userStatus === 16) {
+    header('Content-Type: application/json; charset=utf-8');
+    header('Cache-Control: no-store, no-cache, must-revalidate');
+    echo json_encode([
+        'ok'         => true,
+        'csrf_token' => $_SESSION['csrf_token'] ?? '',
+    ]);
     exit;
 }
 
