@@ -21,6 +21,7 @@
                         'PERMISSIONS_MANAGEMENT' => 'Permissions Management',
                         'ADMIN_WHITELIST' => 'Admin/IP Whitelist Management',
                         'TASK_SCHEDULER' => 'Task Scheduler Management',
+                        'BOSSES_EDITOR' => 'Bosses Management - World Boss configurazione',
                         'ACTIONLOG' => 'Action Logs Viewer'
                     ];
                     ?>

@@ -95,7 +95,80 @@ END
 GO
 
 -- ============================================================
--- 5. Web_DropsEditLog
+-- 5. Web_Bosses
+--    Configura la lista dei World Boss visualizzati in bosses.php.
+--    Gestibile dall'admin panel (Bosses Management).
+--    IsActive=0 nasconde il boss dalla pagina pubblica.
+-- ============================================================
+IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[Web_Bosses]') AND type = N'U')
+BEGIN
+    CREATE TABLE dbo.Web_Bosses (
+        BossID         INT           IDENTITY(1,1) PRIMARY KEY,
+        MobID          INT           NOT NULL,
+        RespawnSeconds INT           NOT NULL DEFAULT 43200,
+        IsActive       BIT           NOT NULL DEFAULT 1,
+        SortOrder      INT           NOT NULL DEFAULT 0,
+        Notes          NVARCHAR(200) NULL,
+        AddedAt        DATETIME      NOT NULL DEFAULT GETDATE()
+    );
+    -- Seed: tutti i boss (vecchio sito + nuovi ID da verificare)
+    INSERT INTO dbo.Web_Bosses (MobID, RespawnSeconds, SortOrder, Notes) VALUES
+        (2469, 54000,  0,  'Dios Exiel 1st Form'),
+        (2472, 54000,  1,  'Dios Exiel Real'),
+        (835,  21600,  2,  'Kimuraku'),
+        (1259, 21600,  3,  'Greendieta Seraphim'),
+        (1975, 604800, 10, 'Haruhion'),
+        (1974, 604800, 11, NULL),
+        (1716, 604800, 12, NULL),
+        (1816, 604800, 13, NULL),
+        (3573, 604800, 14, NULL),
+        (3572, 604800, 15, NULL),
+        (2785, 43200,  20, NULL),
+        (2839, 43200,  21, NULL),
+        (2821, 43200,  22, NULL),
+        (2803, 43200,  23, NULL),
+        (3019, 90000,  30, NULL),
+        (3015, 90000,  31, NULL),
+        (3023, 90000,  32, NULL),
+        (3028, 90000,  33, NULL),
+        (3010, 90000,  34, NULL),
+        (3005, 90000,  35, NULL),
+        (3042, 90000,  36, NULL),
+        (3539, 90000,  37, NULL),
+        (871,  43200,  40, NULL),
+        (872,  43200,  41, NULL),
+        (1700, 604800, 50, NULL),
+        (1702, 604800, 51, NULL),
+        (1703, 604800, 52, NULL),
+        (1704, 604800, 53, NULL),
+        (1705, 604800, 54, NULL),
+        (1706, 604800, 55, NULL),
+        (1707, 604800, 56, NULL),
+        (901,  43200,  60, NULL),
+        (902,  43200,  61, NULL),
+        (1800, 604800, 70, NULL),
+        (1802, 604800, 71, NULL),
+        (1803, 604800, 72, NULL),
+        (3043, 604800, 73, NULL),
+        (3576, 604800, 74, NULL),
+        (1804, 604800, 75, NULL),
+        (1805, 604800, 76, NULL),
+        (1806, 604800, 77, NULL),
+        (1807, 604800, 78, NULL),
+        (3562, 604800, 80, NULL),
+        (3537, 604800, 81, NULL),
+        (3081, 43200,  90, NULL),
+        (3088, 43200,  91, NULL),
+        (2950, 43200,  92, NULL),
+        (2983, 43200,  93, NULL);
+    PRINT 'Created table: Web_Bosses (with seed data)';
+END
+ELSE
+    PRINT 'Table already exists: Web_Bosses';
+GO
+
+-- ============================================================
+-- 6. Web_DropsEditLog
 --    Changelog sessione del Drops Editor.
 --    Registra ogni modifica a MobItems (Grade/DropRate) con
 --    i valori vecchi e nuovi, permettendo l'UNDO per riga.

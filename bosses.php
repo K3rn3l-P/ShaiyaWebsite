@@ -7,51 +7,93 @@ require_once 'db_pdo.php';
 
 $active_page = 'bosses';
 
-// Boss mappings: ID => Respawn Time (seconds) - HARDCODED WHITELIST
-$bosses = [2472 => 54000, 835 => 21600, 1259 => 21600];
-$bossIds = array_keys($bosses);
+function getBossFaction(int $mapId): string {
+    static $light = [1,3,4,5,6,12,13,14,19,21,22,25,28,31,33,35,37,43,48,51,53,55,59,65,68,71,75,77,78];
+    static $dark  = [2,7,8,15,16,17,20,23,24,26,27,29,32,34,36,38,44,49,52,54,56,61,66,69,72,76,79];
+    if (in_array($mapId, $light, true)) return 'light';
+    if (in_array($mapId, $dark,  true)) return 'fury';
+    return 'neutral';
+}
 
-$bossIdsSql = implode(',', array_map('intval', $bossIds));
-
-// Pre-fetch all drops - PDO with dynamic placeholders
-$dropData = [];
-$placeholders = implode(',', array_fill(0, count($bossIds), '?'));
-$queryDrops = "SELECT mi.MobID, i.ItemName, mi.DropRate, mi.ItemOrder 
-              FROM PS_GameDefs.dbo.MobItems mi 
-              JOIN PS_GameDefs.dbo.Items i ON mi.Grade = i.Grade 
-              WHERE mi.MobID IN ($placeholders) 
-              AND mi.Grade > 0 
-              AND LEFT(i.ItemName, 1) != CHAR(63) 
-              ORDER BY mi.DropRate DESC";
+// Carica boss attivi da Web_Bosses (ordinati per SortOrder)
+$bosses = [];
 try {
-    $stmtDrops = $pdoAdmin->prepare($queryDrops);
+    $cfgStmt = $pdoAdmin->query(
+        "SELECT MobID, RespawnSeconds FROM PS_WebSite.dbo.Web_Bosses WHERE IsActive = 1 ORDER BY SortOrder ASC, BossID ASC"
+    );
+    foreach ($cfgStmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $bosses[(int)$r['MobID']] = (int)$r['RespawnSeconds'];
+    }
+} catch (Throwable $e) {}
+
+// Fallback fino a quando la tabella Web_Bosses non viene creata
+if (empty($bosses)) {
+    $bosses = [2469 => 54000, 835 => 21600, 1259 => 21600];
+}
+
+$bossIds = array_keys($bosses);
+$ph      = implode(',', array_fill(0, count($bossIds), '?'));
+
+// Mob info: nome, livello, mapID, nome mappa (singola query con JOIN)
+$mobInfo = [];
+try {
+    $stmtMobs = $pdoAdmin->prepare(
+        "SELECT m.MobID, m.MobName, m.Level, m.MapID, mn.MapName
+         FROM PS_GameDefs.dbo.Mobs m
+         LEFT JOIN PS_GameDefs.dbo.MapNames mn ON mn.MapID = m.MapID
+         WHERE m.MobID IN ($ph)"
+    );
+    $stmtMobs->execute($bossIds);
+    while ($row = $stmtMobs->fetch(PDO::FETCH_ASSOC)) {
+        $mobInfo[(int)$row['MobID']] = [
+            'name'    => mb_convert_encoding((string)$row['MobName'], 'UTF-8', 'Windows-1251'),
+            'level'   => (int)($row['Level'] ?? 0),
+            'mapId'   => (int)($row['MapID'] ?? 0),
+            'mapName' => mb_convert_encoding((string)($row['MapName'] ?? ''), 'UTF-8', 'Windows-1251'),
+        ];
+    }
+} catch (Throwable $e) {}
+
+// Pre-fetch drops
+$dropData = [];
+try {
+    $stmtDrops = $pdoAdmin->prepare(
+        "SELECT mi.MobID, i.ItemName, mi.DropRate, mi.ItemOrder
+         FROM PS_GameDefs.dbo.MobItems mi
+         JOIN PS_GameDefs.dbo.Items i ON mi.Grade = i.Grade
+         WHERE mi.MobID IN ($ph)
+         AND mi.Grade > 0
+         AND LEFT(i.ItemName, 1) != CHAR(63)
+         ORDER BY mi.DropRate DESC"
+    );
     $stmtDrops->execute($bossIds);
     while ($drow = $stmtDrops->fetch(PDO::FETCH_ASSOC)) {
         $dropData[$drow['MobID']][] = [
-            'name' => mb_convert_encoding($drow['ItemName'], 'UTF-8', 'ISO-8859-1'),
-            'rate' => (float)$drow['DropRate'],
+            'name'  => mb_convert_encoding($drow['ItemName'], 'UTF-8', 'Windows-1251'),
+            'rate'  => (float)$drow['DropRate'],
             'order' => (int)$drow['ItemOrder']
         ];
     }
-} catch (Throwable $e) { }
+} catch (Throwable $e) {}
 
-// Pre-fetch latest death logs - PDO with dynamic placeholders
+// Ultimo kill log per ogni boss
 $bossDeaths = [];
-$queryDeaths = "SELECT MobID, CharName, ActionTime 
-                FROM (
-                    SELECT MobID, CharName, ActionTime,
-                           ROW_NUMBER() OVER (PARTITION BY MobID ORDER BY ActionTime DESC) as rn
-                    FROM PS_GameLog.dbo.Boss_Death_Log 
-                    WHERE MobID IN ($placeholders)
-                ) t
-                WHERE rn = 1";
 try {
-    $stmtDeaths = $pdoAdmin->prepare($queryDeaths);
+    $stmtDeaths = $pdoAdmin->prepare(
+        "SELECT MobID, CharName, ActionTime
+         FROM (
+             SELECT MobID, CharName, ActionTime,
+                    ROW_NUMBER() OVER (PARTITION BY MobID ORDER BY ActionTime DESC) as rn
+             FROM PS_GameLog.dbo.Boss_Death_Log
+             WHERE MobID IN ($ph)
+         ) t
+         WHERE rn = 1"
+    );
     $stmtDeaths->execute($bossIds);
     while ($rowD = $stmtDeaths->fetch(PDO::FETCH_ASSOC)) {
         $bossDeaths[$rowD['MobID']] = $rowD;
     }
-} catch (Throwable $e) { }
+} catch (Throwable $e) {}
 
 $timeR = date("Y-m-d H:i:s.000");
 ?>
@@ -61,12 +103,12 @@ $timeR = date("Y-m-d H:i:s.000");
     <meta charset="UTF-8">
     <link rel="icon" href="assets/Duff.ico" type="image/x-icon">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Bosses | Shaiya Duff</title>
+    <title>Bosses | Shaiya Ascension</title>
     <link rel="stylesheet" href="css/style.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
         .boss-table-container {
-            max-width: 1000px;
+            max-width: 1100px;
             margin: 10px auto;
         }
         .content-area-box {
@@ -130,10 +172,17 @@ $timeR = date("Y-m-d H:i:s.000");
         .drop-list-container::-webkit-scrollbar-thumb { background: var(--text-gold); border-radius: 2px; }
         .spawn-note {
             background: rgba(0, 0, 0, 0.4); border-left: 4px solid var(--text-gold);
-            padding: 15px 20px; margin: 0 auto 15px; max-width: 1000px; color: #ddd;
+            padding: 15px 20px; margin: 0 auto 15px; max-width: 1100px; color: #ddd;
             font-size: 14px; line-height: 1.5; border-radius: 0 4px 4px 0;
             box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3); text-align: left;
         }
+        .faction-badge {
+            display: inline-block; padding: 2px 8px; border-radius: 3px;
+            font-size: 11px; font-weight: 700; letter-spacing: 0.05em; white-space: nowrap;
+        }
+        .faction-light   { background: rgba(106,189,244,0.15); color: #6abdf4; border: 1px solid rgba(106,189,244,0.3); }
+        .faction-fury    { background: rgba(244,106,106,0.15); color: #f46a6a; border: 1px solid rgba(244,106,106,0.3); }
+        .faction-neutral { background: rgba(232,200,129,0.10); color: var(--text-gold); border: 1px solid var(--border-gold); }
     </style>
     <script>
         function startTimer(duration, displayId, completeText) {
@@ -141,16 +190,13 @@ $timeR = date("Y-m-d H:i:s.000");
             var display = document.getElementById(displayId);
             if (!display) return;
             var interval = setInterval(function () {
-                hours = parseInt(timer / 3600, 10);
+                hours   = parseInt(timer / 3600, 10);
                 minutes = parseInt((timer % 3600) / 60, 10);
                 seconds = parseInt(timer % 60, 10);
-
-                hours = hours < 10 ? "0" + hours : hours;
+                hours   = hours   < 10 ? "0" + hours   : hours;
                 minutes = minutes < 10 ? "0" + minutes : minutes;
                 seconds = seconds < 10 ? "0" + seconds : seconds;
-
                 display.textContent = hours + "h " + minutes + "m " + seconds + "s";
-
                 if (--timer < 0) {
                     clearInterval(interval);
                     display.innerHTML = completeText;
@@ -184,58 +230,62 @@ $timeR = date("Y-m-d H:i:s.000");
                                 <th>BOSS</th>
                                 <th>MAP</th>
                                 <th>BOSS LEVEL</th>
+                                <th>FACTION</th>
                                 <th>KILLER</th>
                                 <th class="respawn-col">RESPAWN</th>
                             </tr>
                         </thead>
                         <tbody>
                             <?php
-                            $idx = 0;
+                            $idx         = 0;
                             $totalBosses = count($bosses);
-                            foreach ($bosses as $boss => $time) {
+                            foreach ($bosses as $boss => $time):
                                 $idx++;
                                 $tooltipAlignClass = '';
-                                if ($idx === 1) $tooltipAlignClass = 'tooltip-top';
-                                else if ($idx === $totalBosses) $tooltipAlignClass = 'tooltip-bottom';
+                                if ($idx === 1)                $tooltipAlignClass = 'tooltip-top';
+                                elseif ($idx === $totalBosses) $tooltipAlignClass = 'tooltip-bottom';
 
-                                $mapLoc = "Unknown";
-                                $bossName = "Unknown Boss";
-                                $bossLvl = "0";
-                                switch ($boss) {
-                                    case 2472:
-                                        $bossName = "Dios Exiel"; $bossLvl = "64"; $mapLoc = "Caelum Sacra"; break;
-                                    case 835:
-                                        $bossName = "Kimuraku"; $bossLvl = "61"; $mapLoc = "D2 Floor 3"; break;
-                                    case 1259:
-                                        $bossName = "Greendieta Seraphim"; $bossLvl = "62"; $mapLoc = "Sky City Floor 3"; break;
-                                }
+                                // Dati dal DB
+                                $info     = $mobInfo[$boss] ?? null;
+                                $bossName = $info ? $info['name']    : "Boss #$boss";
+                                $bossLvl  = ($info && $info['level'] > 0) ? $info['level'] : '?';
+                                $mapId    = $info ? $info['mapId']   : 0;
+                                $mapLoc   = ($info && $info['mapName'] !== '')
+                                    ? $info['mapName']
+                                    : ($mapId > 0 ? "Map #$mapId" : 'Unknown');
+                                $faction  = getBossFaction($mapId);
 
-                                $row1 = $bossDeaths[$boss] ?? null;
+                                $factionIcon  = match($faction) { 'light' => '<i class="fas fa-sun"></i>', 'fury' => '<i class="fas fa-fire"></i>', default => '<i class="fas fa-circle"></i>' };
+                                $factionLabel = match($faction) { 'light' => 'LIGHT', 'fury' => 'FURY', default => 'NEUTRAL' };
+                                $factionBadge = "<span class='faction-badge faction-{$faction}'>{$factionIcon} {$factionLabel}</span>";
 
-                                $killer = ($row1 && !empty($row1['CharName'])) ? htmlspecialchars(mb_convert_encoding($row1['CharName'], 'UTF-8', 'ISO-8859-1')) : "-";
+                                // Death log
+                                $row1   = $bossDeaths[$boss] ?? null;
+                                $killer = ($row1 && !empty($row1['CharName']))
+                                    ? htmlspecialchars(mb_convert_encoding($row1['CharName'], 'UTF-8', 'Windows-1251'))
+                                    : "-";
 
                                 if (!$row1 || empty($row1['ActionTime'])) {
                                     $showTime = "<span style='color:#9ca3af;'>No Data</span>";
                                 } else {
-                                    $actualTime = date("Y-m-d H:i");
-                                    $nextTime = date("Y-m-d H:i", strtotime($row1['ActionTime'] . '+' . $time . ' seconds'));
+                                    $nextTime  = date("Y-m-d H:i", strtotime($row1['ActionTime'] . '+' . $time . ' seconds'));
                                     $countdown = strtotime($nextTime) - strtotime($timeR);
-
                                     if ($countdown < 0) {
                                         $showTime = "<span class='status-now'>NOW!</span>";
                                     } else {
-                                        $hours = floor($countdown / 3600);
-                                        $mins = floor(($countdown % 3600) / 60);
-                                        $secs = $countdown % 60;
-                                        $formattedTime = sprintf("%02dh %02dm %02ds", $hours, $mins, $secs);
-                                        $showTime = "<span id='boss-timer-$boss' class='respawn-timer'>$formattedTime</span>";
-                                        $showTime .= "<script>startTimer($countdown, 'boss-timer-$boss', '<span class=\"status-now\">NOW!</span>')</script>";
+                                        $h   = floor($countdown / 3600);
+                                        $m   = floor(($countdown % 3600) / 60);
+                                        $s   = $countdown % 60;
+                                        $fmt = sprintf("%02dh %02dm %02ds", $h, $m, $s);
+                                        $showTime  = "<span id='boss-timer-{$boss}' class='respawn-timer'>{$fmt}</span>";
+                                        $showTime .= "<script>startTimer({$countdown},'boss-timer-{$boss}','<span class=\"status-now\">NOW!</span>')</script>";
                                     }
                                 }
 
+                                // Drops tooltip
+                                $seenItems     = [];
                                 $bossDropsHtml = '<tr><td colspan="2" style="text-align:center; padding: 20px 0; color: #9ca3af;">No unique drops recorded</td></tr>';
-                                $seenItems = [];
-                                if (isset($dropData[$boss]) && !empty($dropData[$boss])) {
+                                if (!empty($dropData[$boss])) {
                                     $bossDropsHtml = '';
                                     foreach ($dropData[$boss] as $dropItem) {
                                         if (in_array($dropItem['name'], $seenItems)) continue;
@@ -244,34 +294,35 @@ $timeR = date("Y-m-d H:i:s.000");
                                         if ($dropItem['order'] > 4) $rate = ($rate / 100000);
                                         if ($rate > 100) $rate = 100;
                                         $formattedRate = rtrim(rtrim(number_format($rate, 4), '0'), '.') . '%';
-
-                                        $bossDropsHtml .= '<tr><td>' . htmlspecialchars($dropItem['name']) . '</td><td class="drop-rate-val">' . $formattedRate . '</td></tr>';
+                                        $bossDropsHtml .= '<tr><td>' . htmlspecialchars($dropItem['name']) . '</td>'
+                                            . '<td class="drop-rate-val">' . $formattedRate . '</td></tr>';
                                     }
                                 }
-                                ?>
-                                <tr>
-                                    <td class="boss-name">
-                                        <div class="boss-name-hover"><?php echo htmlspecialchars($bossName); ?>
-                                            <div class="drop-tooltip <?php echo $tooltipAlignClass; ?>">
-                                                <h4>
-                                                    <span><i class="fas fa-gift"></i> Potential Drops</span>
-                                                    <span style="font-size: 10px; opacity: 0.6;"><?php echo count($seenItems); ?> Items</span>
-                                                </h4>
-                                                <div class="drop-list-container">
-                                                    <table>
-                                                        <thead><tr><th>Item Name</th><th style="text-align:right;">Chance</th></tr></thead>
-                                                        <tbody><?php echo $bossDropsHtml; ?></tbody>
-                                                    </table>
-                                                </div>
+                            ?>
+                            <tr>
+                                <td class="boss-name">
+                                    <div class="boss-name-hover"><?php echo htmlspecialchars($bossName); ?>
+                                        <div class="drop-tooltip <?php echo $tooltipAlignClass; ?>">
+                                            <h4>
+                                                <span><i class="fas fa-gift"></i> Potential Drops</span>
+                                                <span style="font-size:10px;opacity:0.6;"><?php echo count($seenItems); ?> Items</span>
+                                            </h4>
+                                            <div class="drop-list-container">
+                                                <table>
+                                                    <thead><tr><th>Item Name</th><th style="text-align:right;">Chance</th></tr></thead>
+                                                    <tbody><?php echo $bossDropsHtml; ?></tbody>
+                                                </table>
                                             </div>
                                         </div>
-                                    </td>
-                                    <td class="map-text"><?php echo htmlspecialchars($mapLoc); ?></td>
-                                    <td class="level-text"><?php echo $bossLvl; ?></td>
-                                    <td class="killer-text"><?php echo $killer; ?></td>
-                                    <td class="respawn-col"><?php echo $showTime; ?></td>
-                                </tr>
-                            <?php } ?>
+                                    </div>
+                                </td>
+                                <td class="map-text"><?php echo htmlspecialchars($mapLoc); ?></td>
+                                <td class="level-text"><?php echo $bossLvl; ?></td>
+                                <td><?php echo $factionBadge; ?></td>
+                                <td class="killer-text"><?php echo $killer; ?></td>
+                                <td class="respawn-col"><?php echo $showTime; ?></td>
+                            </tr>
+                            <?php endforeach; ?>
                         </tbody>
                     </table>
                 </div>

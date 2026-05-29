@@ -746,12 +746,12 @@ try {
                     <?php if (hasAdminAccess('POINTS')): ?><li><a href="/admin?view=Points" class="<?php echo isActive('POINTS', $current_view); ?>">POINTS</a></li><?php endif; ?>
                     
                     <?php 
-                    $hasWebsiteChild = hasAdminAccess('DROPS_EDITOR') || hasAdminAccess('DROPS_BLACKLIST_ADD') || hasAdminAccess('LUCKYCHEST_TOGGLE') || hasAdminAccess('DOWNLOADS_UPDATE') || hasAdminAccess('REGISTER_TOGGLE') || hasAdminAccess('PERMISSIONS_MANAGEMENT') || hasAdminAccess('ADMIN_WHITELIST') || hasAdminAccess('TASK_SCHEDULER');
+                    $hasWebsiteChild = hasAdminAccess('DROPS_EDITOR') || hasAdminAccess('DROPS_BLACKLIST_ADD') || hasAdminAccess('LUCKYCHEST_TOGGLE') || hasAdminAccess('DOWNLOADS_UPDATE') || hasAdminAccess('REGISTER_TOGGLE') || hasAdminAccess('PERMISSIONS_MANAGEMENT') || hasAdminAccess('ADMIN_WHITELIST') || hasAdminAccess('TASK_SCHEDULER') || hasAdminAccess('BOSSES_EDITOR');
                     if ($hasWebsiteChild): 
                     ?>
                     <li class="admin-has-dropdown">
                         <a href="#"
-                            class="<?php echo ($current_view === 'OTHER' || strpos($current_view, 'DROPS') !== false || strpos($current_view, 'LUCKYCHEST') !== false || $current_view === 'DOWNLOADS_UPDATE' || $current_view === 'REGISTER_TOGGLE' || $current_view === 'PERMISSIONS_MANAGEMENT' || $current_view === 'ADMIN_WHITELIST' || $current_view === 'TASK_SCHEDULER') ? 'active' : ''; ?>">WEBSITE
+                            class="<?php echo ($current_view === 'OTHER' || strpos($current_view, 'DROPS') !== false || strpos($current_view, 'LUCKYCHEST') !== false || $current_view === 'DOWNLOADS_UPDATE' || $current_view === 'REGISTER_TOGGLE' || $current_view === 'PERMISSIONS_MANAGEMENT' || $current_view === 'ADMIN_WHITELIST' || $current_view === 'TASK_SCHEDULER' || $current_view === 'BOSSES_EDITOR') ? 'active' : ''; ?>">WEBSITE
                             <i class="fas fa-caret-down"></i></a>
                         <ul class="admin-dropdown-menu">
                             <?php if (hasAdminAccess('DROPS_EDITOR')): ?><li><a href="/admin?view=drops_editor">Drops Editor</a></li><?php endif; ?>
@@ -762,6 +762,7 @@ try {
                             <?php if (hasAdminAccess('PERMISSIONS_MANAGEMENT')): ?><li><a href="/admin?view=permissions_management">Permissions Management</a></li><?php endif; ?>
                             <?php if (hasAdminAccess('ADMIN_WHITELIST')): ?><li><a href="/admin?view=admin_whitelist">Admin/IP Whitelist</a></li><?php endif; ?>
                             <?php if (hasAdminAccess('TASK_SCHEDULER')): ?><li><a href="/admin?view=task_scheduler">Task Scheduler</a></li><?php endif; ?>
+                            <?php if (hasAdminAccess('BOSSES_EDITOR')): ?><li><a href="/admin?view=bosses_editor">Bosses Management</a></li><?php endif; ?>
                         </ul>
                     </li>
                     <?php endif; ?>
@@ -848,6 +849,13 @@ try {
                 ?>
                 <?php elseif ($view === 'CHAREDIT' || $view === 'CharEdit'):
                     include __DIR__ . '/adm-panel/character-edit.php'; ?>
+                <?php elseif ($view === 'BOSSES_EDITOR'):
+                    if (!hasAdminAccess('BOSSES_EDITOR')) {
+                        echo '<div style="padding:40px;text-align:center;color:#e53e3e;"><i class="fas fa-lock" style="font-size:32px;margin-bottom:16px;display:block;opacity:0.4;"></i>Access denied.</div>';
+                    } else {
+                        include __DIR__ . '/adm-panel/bosses-editor.php';
+                    }
+                ?>
 
                 <?php endif; ?> <!-- end main view switch -->
             </section>
