@@ -76,3 +76,8 @@ RewriteRule "^(server-status|server-info)" - [F,L]
 <FilesMatch "\.(md|markdown)$">
     Require all denied
 </FilesMatch>
+# Restrict HTTP methods - allow only GET, HEAD, POST, OPTIONS
+<LimitExcept GET HEAD POST OPTIONS>
+    Require all denied
+</LimitExcept>
+
