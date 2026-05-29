@@ -7,15 +7,27 @@
 - Per test CLI sul server remoto usa la shell SSH già disponibile e verifica servizi e file direttamente sotto `C:\xampp\` quando il problema riguarda l’ambiente live.
 - Percorsi lato server da considerare come baseline operativa:
   - `C:\xampp\htdocs` per i file del sito live.
+  - `C:\xampp\php\php.ini` per la configurazione PHP live.
+  - `C:\xampp\php\logs\php_error_log` per gli errori PHP.
   - `C:\xampp\apache\logs\error.log` e `C:\xampp\apache\logs\access.log` per i log Apache.
   - `C:\xampp\apache\logs\ssl_request.log` per le richieste HTTPS/SSL.
+  - `C:\xampp\apache\conf\httpd.conf` per il core Apache e il server hardening.
   - `C:\xampp\apache\conf\extra\httpd-ssl.conf` per la configurazione SSL/TLS di Apache.
+  - `C:\xampp\apache\conf\extra\httpd-vhosts.conf` per i VirtualHost.
   - Servizio Windows `Apache2.4` per restart/test di Apache sul server.
-
+  - Servizio Windows `sshd` per l’accesso remoto amministrativo.- Percorsi strumenti di sicurezza nel progetto (repo):
+  - `tools/security-monitor/security-audit-advanced.ps1` — audit completo da eseguire dopo ogni modifica.
+  - `tools/security-monitor/security-autofix-safe.ps1` — autofix safe (dry-run default; `-Apply` per applicare).
+  - `tools/security-monitor/security-alert-monitor.ps1` — monitor continuo eventi di sicurezza (rate limit, auth failures).
+  - `tools/security-monitor/install-scheduled-task.ps1` — installa il monitor come Scheduled Task su Windows; auto-rileva la root da `$PSScriptRoot`, eseguire da `C:\xampp\htdocs\tools\security-monitor\` sul server live.
+  - `tools/task-scheduler-worker/worker.ps1` — worker PowerShell per task scheduler interno; eseguito come servizio Windows.
+  - `tools/task-scheduler-worker/worker.config.sample.json` — template di configurazione worker (copiare e adattare senza committare dati reali).
+- Quando devo installare/verificare il task scheduler sul server live: SSH → `C:\xampp\htdocs\tools\security-monitor\install-scheduled-task.ps1` (eseguire dalla stessa cartella, non da percorsi UNC).
 ## Nota operativa SSH / XAMPP
 - Per accesso remoto live usa sempre prima SSH; evita di dedurre lo stato del server solo dal workspace locale.
 - Se il problema riguarda Apache o TLS, controlla prima i log sotto `C:\xampp\apache\logs` e poi la configurazione sotto `C:\xampp\apache\conf`.
 - Se il problema riguarda PHP, controlla la versione e il runtime effettivo installati nel server XAMPP remoto, non quelli del PC locale.
+- Se il problema riguarda PHP.ini, verifica almeno `display_errors`, `display_startup_errors`, `expose_php`, `allow_url_fopen`, `allow_url_include`, `session.cookie_secure`, `session.cookie_httponly`, `session.cookie_samesite` e `disable_functions`.
 
 PARLA SEMPRE ITALIANO.
 ## 🔍 RICERCA WEB MCP — REGOLA IMPRESCINDIBILE (PRIORITY 0)

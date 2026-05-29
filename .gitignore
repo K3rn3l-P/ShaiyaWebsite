@@ -14,6 +14,11 @@ uploads/news/*
 htdocs/*
 htdocs.zip
 
+# ─── Task Scheduler Worker (non tracciare) ───
+worker.config.json
+worker-config-sync.sql
+worker-error.log
+
 # ─── Syncthing (non tracciare) ───
 syncthing*
 .stfolder

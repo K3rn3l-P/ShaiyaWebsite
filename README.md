@@ -226,12 +226,63 @@ The admin panel is accessible at `admin.php` for users with Status 16, 32, or 48
 
 > ⚠️ **This project is designed for private server use within a trusted network.** Review these points before any public deployment.
 
-- **Passwords** are stored and compared in plaintext (as is standard for Shaiya's `Users_Master` table). The website does not add its own hashing layer since it must remain compatible with the game client.
-- **SQL Injection**: Most queries use parameterized statements (`odbc_prepare` + `odbc_execute`). A few admin-only queries use string interpolation - these are behind strict status checks.
-- **Session Security**: Sessions use PHP's native session handler. Consider adding `session_regenerate_id()` on login and setting secure cookie flags for production.
-- **File Uploads**: News image uploads are restricted to PNG, JPG, and WebP formats with MIME type validation.
-- **CSRF**: Forms do not currently implement CSRF tokens. Consider adding them for production.
-- **Database Credentials**: Remember to update `db.php` and `db_pdo.php` with your own credentials before deploying. **Never commit real credentials to a public repository.**
+### ✅ Security Hardening Applied (post-audit)
+
+The following security measures have been implemented in this codebase and are active on the reference deployment:
+
+| Area | Status | Detail |
+|------|--------|--------|
+| **SQL Injection** | ✅ Fixed | All queries migrated to PDO prepared statements (`$pdoConn` / `$pdoAdmin`). Zero `odbc_exec` with dynamic values in the active codebase. |
+| **CSRF Protection** | ✅ Implemented | Synchronizer token pattern on all mutating POST forms via `appVerifyCsrfToken()` in `security_bootstrap.php`. |
+| **Password Hashing** | ✅ Partially mitigated | Web site login uses Argon2ID (`Enpassword` column, VARCHAR 255). The `Pw` column remains plaintext — immutable game-engine architectural requirement. |
+| **Session Security** | ✅ Hardened | `HttpOnly=On`, `Secure=On`, `SameSite=Lax` set both in `security_bootstrap.php` and in `php.ini` on the server. `session_regenerate_id(true)` called on login. |
+| **Security Headers** | ✅ Active | `X-Content-Type-Options`, `X-Frame-Options: DENY`, `Referrer-Policy`, `Permissions-Policy`, `HSTS` (HTTPS only) applied via `appApplySecurityHeaders()`. |
+| **Rate Limiting** | ✅ Active | Login (7/15 min), registration (5/15 min), admin actions (120/5 min), drops/rankings anti-scraping — all enforced via `appRateLimitAllow()`. |
+| **File Uploads** | ✅ Hardened | Magic byte MIME validation via `finfo_open(FILEINFO_MIME_TYPE)`. `uploads/.htaccess` blocks PHP execution. |
+| **Admin Access** | ✅ Protected | Status check + IP/User whitelist + CSRF + rate limit + audit log on all admin actions. |
+| **XSS (Stored)** | ✅ Mitigated | News content sanitised server-side via `appSanitizeNewsRenderContent()` before HTML output. |
+| **Inline JS (CSP)** | ✅ Cleaned | `onclick`/`onchange`/`onsubmit` inline handlers removed from `admin.php`, `index.php`, `drops.php`; replaced with delegated listeners in `js/script.js`. |
+| **Directory Exposure** | ✅ Hardened | `config/`, `tools/`, `sql/`, `inc/` deny-by-default via `.htaccess`. Root blocks dotfiles/dot-directories. |
+
+### Server-Side Hardening (XAMPP / Apache / PHP)
+
+Applied directly on the live server (`C:\xampp`) — not part of the PHP codebase but required for production security:
+
+**`C:\xampp\php\php.ini`**
+```
+display_errors = Off
+display_startup_errors = Off
+expose_php = Off
+allow_url_fopen = Off
+allow_url_include = Off
+session.cookie_httponly = On
+session.cookie_secure = On
+session.cookie_samesite = Lax
+disable_functions = exec,system,shell_exec,passthru,proc_open,popen,pcntl_exec
+```
+
+**`C:\xampp\apache\conf\httpd.conf`**
+```
+ServerTokens Prod
+ServerSignature Off
+```
+
+**`C:\xampp\apache\conf\extra\httpd-ssl.conf`**
+```
+SSLUseStapling Off   # Disables OCSP stapling log noise (Tailscale/Let's Encrypt)
+```
+
+### Remaining Known Risks
+
+| ID | Area | Note |
+|----|------|------|
+| C-01 | Plaintext `Pw` column | Game client auth requirement — cannot be removed without game client changes. Mitigate with DB encryption (TDE) and restricted DB access. |
+| M-04 | 2FA for admin | Not yet implemented. |
+| L-02 | Automated security tests | No CI regression suite yet. |
+
+### Database Credentials
+
+Remember to update `db.php` and `db_pdo.php` with your own credentials before deploying. **Never commit real credentials to a public repository.** Use environment variables or a `.env` file excluded via `.gitignore`.
 
 <p align="center">
   <sub>Built with ☕ and dedication</sub>

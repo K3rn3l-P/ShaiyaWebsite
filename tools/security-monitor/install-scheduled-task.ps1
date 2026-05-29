@@ -1,9 +1,14 @@
 param(
     [string]$TaskName = "ShaiyaSecurityAlertMonitor",
     [int]$IntervalMinutes = 5,
-    [string]$WebsiteRoot = "\\win-acmn7b375u8\htdocs",
+    [string]$WebsiteRoot = "",
     [bool]$ApplyFirewallBlock = $false
 )
+
+# Auto-detect WebsiteRoot from the script's location (tools\security-monitor -> htdocs)
+if (-not $WebsiteRoot) {
+    $WebsiteRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
+}
 
 $ErrorActionPreference = 'Stop'
 
@@ -32,7 +37,7 @@ $argList = @(
 $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument ($argList -join ' ')
 $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
     -RepetitionInterval (New-TimeSpan -Minutes $IntervalMinutes) `
-    -RepetitionDuration ([TimeSpan]::MaxValue)
+    -RepetitionDuration (New-TimeSpan -Days 9999)
 
 $settings = New-ScheduledTaskSettingsSet `
     -AllowStartIfOnBatteries `
