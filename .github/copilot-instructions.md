@@ -1,4 +1,22 @@
 # Copilot Instructions — Shaiya Web Portal (Fonte Principale)
+
+## Nota operativa importante
+- Da ora in poi puoi accedere al server remoto Windows con SSH usando `ssh -i id_ed25519 -o IdentitiesOnly=yes administrator@10.10.5.91`.
+- Quando serve verificare comportamento reale di PHP, Apache/XAMPP o il sito in esecuzione, considera come sorgente autorevole il server remoto, in particolare `C:\xampp\htdocs`.
+- Il workspace locale resta utile per editing e revisione, ma non va confuso con l’istanza remota su cui gira il sito.
+- Per test CLI sul server remoto usa la shell SSH già disponibile e verifica servizi e file direttamente sotto `C:\xampp\` quando il problema riguarda l’ambiente live.
+- Percorsi lato server da considerare come baseline operativa:
+  - `C:\xampp\htdocs` per i file del sito live.
+  - `C:\xampp\apache\logs\error.log` e `C:\xampp\apache\logs\access.log` per i log Apache.
+  - `C:\xampp\apache\logs\ssl_request.log` per le richieste HTTPS/SSL.
+  - `C:\xampp\apache\conf\extra\httpd-ssl.conf` per la configurazione SSL/TLS di Apache.
+  - Servizio Windows `Apache2.4` per restart/test di Apache sul server.
+
+## Nota operativa SSH / XAMPP
+- Per accesso remoto live usa sempre prima SSH; evita di dedurre lo stato del server solo dal workspace locale.
+- Se il problema riguarda Apache o TLS, controlla prima i log sotto `C:\xampp\apache\logs` e poi la configurazione sotto `C:\xampp\apache\conf`.
+- Se il problema riguarda PHP, controlla la versione e il runtime effettivo installati nel server XAMPP remoto, non quelli del PC locale.
+
 PARLA SEMPRE ITALIANO.
 ## 🔍 RICERCA WEB MCP — REGOLA IMPRESCINDIBILE (PRIORITY 0)
 

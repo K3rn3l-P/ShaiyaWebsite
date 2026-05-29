@@ -1087,6 +1087,7 @@ try {
                                                 <input type="hidden" name="action" value="guild_rename">
                                                 <input type="hidden" name="guild_id" value="<?php echo $guildID; ?>">
                                                 <input type="hidden" name="return_view" value="GUILD_OVERVIEW">
+                                                <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>">
                                                 <div class="char-input-group" style="flex: 1; margin: 0;">
                                                     <input type="text" name="new_name" class="char-input"
                                                         value="<?php echo htmlspecialchars($g['GuildName']); ?>" required
@@ -1105,6 +1106,7 @@ try {
                                                 <input type="hidden" name="action" value="guild_change_leader">
                                                 <input type="hidden" name="guild_id" value="<?php echo $guildID; ?>">
                                                 <input type="hidden" name="return_view" value="GUILD_OVERVIEW">
+                                                <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>">
                                                 <div class="char-input-group" style="flex: 1; margin: 0;">
                                                     <select name="new_leader_id" class="char-input"
                                                         style="height: 40px; background: rgba(0,0,0,0.3);">
@@ -1417,6 +1419,7 @@ try {
                                                                 value="<?php echo $item['ItemUID']; ?>">
                                                             <input type="hidden" name="return_view" value="GUILD_OVERVIEW">
                                                             <input type="hidden" name="tab" value="Warehouse">
+                                                            <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>">
                                                             <button type="submit" class="inventory-icon-btn btn-delete"
                                                                 title="Delete Permanent"><i class="fas fa-trash-alt"></i></button>
                                                         </form>
@@ -1552,6 +1555,7 @@ try {
                                 <form action="/admin_actions" method="POST" style="display: block;">
                                     <input type="hidden" name="action" value="giftbox">
                                     <input type="hidden" name="return_view" value="GIFTBOX">
+                                    <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>">
 
                                     <div style="display: flex; flex-direction: column; gap: 20px; margin-bottom: 30px;">
                                         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
@@ -1671,6 +1675,7 @@ try {
                                 <form action="/admin_actions" method="POST" style="display: block;">
                                     <input type="hidden" name="action" value="points_add">
                                     <input type="hidden" name="return_view" value="POINTS">
+                                    <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>">
 
                                     <div style="display: flex; flex-direction: column; gap: 22px; margin-bottom: 30px;">
                                         <div class="char-input-group" style="display: block;">
@@ -1732,15 +1737,21 @@ try {
                                     $offset = ($page - 1) * $perPage;
 
                                     $totalHistory = 0;
+                                    $totalHistoryPages = 1;
                                     $pointHistory = [];
                                     try {
                                         $cRes = $pdoAdmin->query("SELECT COUNT(*) as Total FROM PS_WebSite.dbo.Web_PointHistory");
                                         if ($cRes) $totalHistory = (int) ($cRes->fetch(PDO::FETCH_ASSOC)['Total'] ?? 0);
-                                        $totalHistoryPages = ceil($totalHistory / $perPage);
-                                        $histQ = $pdoAdmin->prepare("SELECT RowID, UserID, Date, PointsAdded, Reason, GM_Account FROM PS_WebSite.dbo.Web_PointHistory ORDER BY RowID DESC OFFSET ? ROWS FETCH NEXT ? ROWS ONLY");
-                                        $histQ->execute([$offset, $perPage]);
-                                        $pointHistory = $histQ->fetchAll(PDO::FETCH_ASSOC);
-                                    } catch (Throwable $e) {}
+                                        $totalHistoryPages = max(1, (int) ceil($totalHistory / $perPage));
+
+                                        // Robust fallback: avoid SQL Server ODBC pagination quirks (OFFSET/CTE + placeholders)
+                                        // and paginate in PHP to ensure history is always visible when records exist.
+                                        $histQ = $pdoAdmin->query("SELECT TOP 5000 RowID, UserID, [Date], PointsAdded, Reason, GM_Account FROM PS_WebSite.dbo.Web_PointHistory ORDER BY RowID DESC");
+                                        $historyRows = $histQ ? $histQ->fetchAll(PDO::FETCH_ASSOC) : [];
+                                        $pointHistory = array_slice($historyRows, $offset, $perPage);
+                                    } catch (Throwable $e) {
+                                        appSecurityLog('Points history load failed in admin.php: ' . $e->getMessage());
+                                    }
                                     $count = 0;
                                     foreach ($pointHistory as $h):
                                         $count++;
@@ -1839,6 +1850,7 @@ try {
                                         <form action="/admin_actions" method="POST">
                                             <input type="hidden" name="action" value="drops_config">
                                             <input type="hidden" name="return_view" value="<?php echo $view; ?>">
+                                            <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>">
 
                                             <div
                                                 style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 25px;">
@@ -1887,6 +1899,7 @@ try {
                                             <form action="/admin_actions" method="POST">
                                                 <input type="hidden" name="action" value="drops_blacklist_add">
                                                 <input type="hidden" name="return_view" value="<?php echo $view; ?>">
+                                                <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>">
                                                 <div class="char-input-group" style="margin-bottom: 12px;">
                                                     <input type="number" name="itemid" class="char-input"
                                                         placeholder="ItemID to add..." required
@@ -1898,6 +1911,7 @@ try {
                                             <form action="/admin_actions" method="POST">
                                                 <input type="hidden" name="action" value="drops_blacklist_remove">
                                                 <input type="hidden" name="return_view" value="<?php echo $view; ?>">
+                                                <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>">
                                                 <div class="char-input-group" style="margin-bottom: 12px;">
                                                     <input type="number" name="itemid" class="char-input"
                                                         placeholder="ItemID to remove..." required
@@ -1984,6 +1998,7 @@ try {
                                     <form action="/admin_actions" method="POST" style="width: 100%;">
                                         <input type="hidden" name="action" value="luckychest_toggle">
                                         <input type="hidden" name="return_view" value="<?php echo $view; ?>">
+                                        <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>">
                                         <div style="display: flex; flex-direction: column; align-items: center; gap: 20px;">
                                             <label class="switch" style="transform: scale(1.6);">
                                                 <input type="checkbox" name="lucky_enabled" <?php echo $luckyEnabled == '1' ? 'checked' : ''; ?> class="js-auto-submit-onchange">
@@ -2008,6 +2023,7 @@ try {
                                         style="margin-bottom: 35px; display: block;">
                                         <input type="hidden" name="action" value="luckychest_reset_user">
                                         <input type="hidden" name="return_view" value="<?php echo $view; ?>">
+                                        <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>">
                                         <label
                                             style="display: block; color: #888; font-size: 11px; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 1px;">Reset
                                             Single User</label>
@@ -2026,6 +2042,7 @@ try {
                                             style="display: block;">
                                             <input type="hidden" name="action" value="luckychest_reset_all">
                                             <input type="hidden" name="return_view" value="<?php echo $view; ?>">
+                                            <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>">
                                             <button type="submit" class="btn-action"
                                                 style="background: rgba(165,39,39,0.8); border-color: #a52727;">
                                                 <i class="fas fa-redo-alt"></i> RESET ALL TIMERS
@@ -2057,6 +2074,7 @@ try {
                                 style="background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05); border-radius: 12px; padding: 40px; display: block;">
                                 <input type="hidden" name="action" value="downloads_update">
                                 <input type="hidden" name="return_view" value="DOWNLOADS_UPDATE">
+                                <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>">
 
                                 <!-- Status Section -->
                                 <div
@@ -2888,6 +2906,7 @@ try {
                             <form action="/admin_actions" method="POST" style="display: block;">
                                 <input type="hidden" name="action" value="register_toggle">
                                 <input type="hidden" name="return_view" value="REGISTER_TOGGLE">
+                                <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>">
 
                                 <div
                                     style="background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05); padding: 50px; border-radius: 12px; box-shadow: 0 20px 50px rgba(0,0,0,0.5);">
@@ -3305,6 +3324,7 @@ try {
                                         <input type="hidden" name="action" value="user_kick">
                                         <input type="hidden" name="user_uid" value="<?php echo $userUID; ?>">
                                         <input type="hidden" name="return_view" value="UserEdit">
+                                        <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>">
                                         <button type="submit" class="admin-btn btn-kick">USER KICK</button>
                                     </form>
                                     <a href="/admin?view=Giftbox&target_user=<?php echo urlencode($userData['UserID']); ?>"
@@ -3356,6 +3376,7 @@ try {
                                         <input type="hidden" name="action" value="user_update_status">
                                         <input type="hidden" name="user_uid" value="<?php echo $userUID; ?>">
                                         <input type="hidden" name="return_view" value="UserEdit">
+                                        <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>">
                                         <label style="color: #888; font-size: 13px; width: 120px; text-align: right;">Status</label>
                                         <select name="new_status" class="char-input" style="width: 200px;">
                                             <option value="0" <?php echo (int) $userData['Status'] === 0 ? 'selected' : ''; ?>>Player
@@ -3384,6 +3405,7 @@ try {
                                         <input type="hidden" name="action" value="user_change_password">
                                         <input type="hidden" name="user_uid" value="<?php echo $userUID; ?>">
                                         <input type="hidden" name="return_view" value="UserEdit">
+                                        <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>">
                                         <label style="color: #888; font-size: 13px; width: 120px; text-align: right;">Password
                                             change</label>
                                         <input type="text" name="new_password" class="char-input" style="width: 200px;"
@@ -3586,6 +3608,7 @@ try {
                                                                     <input type="hidden" name="user_uid" value="<?php echo $userUID; ?>">
                                                                     <input type="hidden" name="return_view" value="UserEdit">
                                                                     <input type="hidden" name="tab" value="Characters">
+                                                                    <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>">
                                                                     <button type="submit"
                                                                         style="background:none; border:none; color:#e53e3e; cursor:pointer; font-size: 18px;"
                                                                         title="Delete"><i class="fas fa-trash"></i></button>
@@ -3648,6 +3671,7 @@ try {
                                                                 <input type="hidden" name="user_uid" value="<?php echo $userUID; ?>">
                                                                 <input type="hidden" name="return_view" value="UserEdit">
                                                                 <input type="hidden" name="tab" value="Characters">
+                                                                <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>">
                                                                 <button type="submit"
                                                                     style="background:none; border:none; color:#48bb78; cursor:pointer;"
                                                                     title="Restore"><i class="fas fa-undo"></i></button>
