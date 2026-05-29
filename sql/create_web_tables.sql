@@ -5,7 +5,7 @@
 -- tables needed by the website. Safe to re-run (IF NOT EXISTS).
 -- ============================================================
 
-USE PS_WebSite;
+USE [PS_WebSite];
 GO
 
 -- ============================================================
@@ -92,4 +92,37 @@ BEGIN
     END
     PRINT 'Table already exists: Web_LuckyCase';
 END
+GO
+
+-- ============================================================
+-- 5. Web_DropsEditLog
+--    Changelog sessione del Drops Editor.
+--    Registra ogni modifica a MobItems (Grade/DropRate) con
+--    i valori vecchi e nuovi, permettendo l'UNDO per riga.
+--    Auto-cleanup: righe > 24h cancellate al caricamento della pagina.
+-- ============================================================
+USE [PS_WebSite];
+GO
+IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[Web_DropsEditLog]') AND type = N'U')
+BEGIN
+    CREATE TABLE dbo.Web_DropsEditLog (
+        LogID       INT           IDENTITY(1,1) PRIMARY KEY,
+        AdminUID    INT           NOT NULL,
+        AdminID     VARCHAR(32)   NOT NULL,
+        RowID       INT           NOT NULL,
+        MobID       INT           NOT NULL,
+        MobName     NVARCHAR(100) NULL,
+        ItemOrder   TINYINT       NOT NULL,
+        OldGrade    SMALLINT      NULL,
+        NewGrade    SMALLINT      NOT NULL,
+        OldDropRate INT           NULL,
+        NewDropRate INT           NOT NULL,
+        ChangedAt   DATETIME      NOT NULL DEFAULT GETDATE()
+    );
+    CREATE INDEX IX_Web_DropsEditLog_AdminUID
+        ON dbo.Web_DropsEditLog(AdminUID, ChangedAt DESC);
+    PRINT 'Created table: Web_DropsEditLog';
+END
+ELSE
+    PRINT 'Table already exists: Web_DropsEditLog';
 GO

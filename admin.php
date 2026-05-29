@@ -650,6 +650,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && (isset($_POST['admin_action']) || i
     }
 }
 
+// === SQL Export intercept — PRIMA dell'HTML ===
+if (strtoupper($_GET['view'] ?? '') === 'DROPS_EDITOR'
+    && ($_GET['export'] ?? '') === 'sql'
+    && $userStatus === 16) {
+    include __DIR__ . '/adm-panel/drops_export.php';
+    exit;
+}
+
 // --- Fetch Top Bar Stats ---
 $charsOnline = 0;
 $usersToday = 0;
@@ -726,7 +734,7 @@ try {
                     <?php if (hasAdminAccess('POINTS')): ?><li><a href="/admin?view=Points" class="<?php echo isActive('POINTS', $current_view); ?>">POINTS</a></li><?php endif; ?>
                     
                     <?php 
-                    $hasWebsiteChild = hasAdminAccess('DROPS_BLACKLIST_ADD') || hasAdminAccess('LUCKYCHEST_TOGGLE') || hasAdminAccess('DOWNLOADS_UPDATE') || hasAdminAccess('REGISTER_TOGGLE') || hasAdminAccess('PERMISSIONS_MANAGEMENT') || hasAdminAccess('ADMIN_WHITELIST') || hasAdminAccess('TASK_SCHEDULER');
+                    $hasWebsiteChild = hasAdminAccess('DROPS_EDITOR') || hasAdminAccess('DROPS_BLACKLIST_ADD') || hasAdminAccess('LUCKYCHEST_TOGGLE') || hasAdminAccess('DOWNLOADS_UPDATE') || hasAdminAccess('REGISTER_TOGGLE') || hasAdminAccess('PERMISSIONS_MANAGEMENT') || hasAdminAccess('ADMIN_WHITELIST') || hasAdminAccess('TASK_SCHEDULER');
                     if ($hasWebsiteChild): 
                     ?>
                     <li class="admin-has-dropdown">
@@ -734,6 +742,7 @@ try {
                             class="<?php echo ($current_view === 'OTHER' || strpos($current_view, 'DROPS') !== false || strpos($current_view, 'LUCKYCHEST') !== false || $current_view === 'DOWNLOADS_UPDATE' || $current_view === 'REGISTER_TOGGLE' || $current_view === 'PERMISSIONS_MANAGEMENT' || $current_view === 'ADMIN_WHITELIST' || $current_view === 'TASK_SCHEDULER') ? 'active' : ''; ?>">WEBSITE
                             <i class="fas fa-caret-down"></i></a>
                         <ul class="admin-dropdown-menu">
+                            <?php if (hasAdminAccess('DROPS_EDITOR')): ?><li><a href="/admin?view=drops_editor">Drops Editor</a></li><?php endif; ?>
                             <?php if (hasAdminAccess('DROPS_BLACKLIST_ADD')): ?><li><a href="/admin?view=drops_blacklist_add">Drops Management</a></li><?php endif; ?>
                             <?php if (hasAdminAccess('LUCKYCHEST_TOGGLE')): ?><li><a href="/admin?view=luckychest_toggle">LuckyChest Management</a></li><?php endif; ?>
                             <?php if (hasAdminAccess('DOWNLOADS_UPDATE')): ?><li><a href="/admin?view=downloads_update">Downloads Management</a></li><?php endif; ?>
@@ -892,6 +901,7 @@ try {
                         'GUILDS' => 'Guilds Management',
                         'GIFTBOX' => 'Giftbox Management',
                         'POINTS' => 'Points Management',
+                        'DROPS_EDITOR' => 'Drops Editor - Modifica drop rate mob',
                         'DROPS_BLACKLIST_ADD' => 'Drops Blacklist Management',
                         'LUCKYCHEST_TOGGLE' => 'LuckyChest Management',
                         'DOWNLOADS_UPDATE' => 'Downloads Management',
@@ -5002,6 +5012,13 @@ try {
                         </div>
                     <?php endif; ?>
 
+                <?php elseif ($view === 'DROPS_EDITOR'):
+                    if (!hasAdminAccess('DROPS_EDITOR')) {
+                        echo '<div style="padding:40px;text-align:center;color:#e53e3e;"><i class="fas fa-lock" style="font-size:32px;margin-bottom:16px;display:block;opacity:0.4;"></i>Accesso non autorizzato.</div>';
+                    } else {
+                        include __DIR__ . '/adm-panel/drops_editor.php';
+                    }
+                ?>
                 <?php elseif ($view === 'CHAREDIT' || $view === 'CharEdit'): ?>
                     <?php
                     $charID = isset($_GET['id']) ? (int) $_GET['id'] : 0;

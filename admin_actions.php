@@ -1682,6 +1682,164 @@ switch ($action) {
         $msg = "Run request queued successfully.";
         break;
 
+    case 'drops_update_row':
+        if ($adminStatus != 16) {
+            $msg = "Unauthorized.";
+            $status = "error";
+            break;
+        }
+        $rowId    = isset($_POST['row_id'])    ? (int) $_POST['row_id']    : 0;
+        $grade    = isset($_POST['grade'])     ? (int) $_POST['grade']     : 0;
+        $dropRate = isset($_POST['drop_rate']) ? (int) $_POST['drop_rate'] : -1;
+        if ($rowId <= 0 || $dropRate < 0 || $grade < 0) {
+            $msg = "Parametri non validi.";
+            $status = "error";
+            break;
+        }
+        if (!appRateLimitAllow('drops_edit:' . $username, 60, 60)) {
+            $msg = "Rate limit raggiunto. Attendi prima di continuare — apri il changelog per vedere le modifiche effettuate.";
+            $status = "error";
+            break;
+        }
+        try {
+            // Leggi valori attuali + MobID/MobName prima dell'UPDATE
+            $oldStmt = $pdoAdmin->prepare("SELECT mi.Grade, mi.DropRate, mi.MobID, mi.ItemOrder, m.MobName FROM PS_GameDefs.dbo.MobItems mi LEFT JOIN PS_GameDefs.dbo.Mobs m ON m.MobID = mi.MobID WHERE mi.RowID = ?");
+            $oldStmt->execute([$rowId]);
+            $oldRow = $oldStmt->fetch(PDO::FETCH_ASSOC);
+
+            $drStmt = $pdoAdmin->prepare("UPDATE PS_GameDefs.dbo.MobItems SET Grade = ?, DropRate = ? WHERE RowID = ?");
+            $drStmt->execute([$grade, $dropRate, $rowId]);
+            $affected = $drStmt->rowCount();
+
+            if ($affected > 0) {
+                $mobId   = $oldRow ? (int) $oldRow['MobID']    : 0;
+                $mobName = $oldRow ? (string) $oldRow['MobName'] : '';
+                $itemOrd = $oldRow ? (int) $oldRow['ItemOrder'] : 0;
+                $oldGrd  = $oldRow ? (int) $oldRow['Grade']     : null;
+                $oldDr   = $oldRow ? (int) $oldRow['DropRate']  : null;
+
+                $msg = "MobID $mobId" . ($mobName ? " ($mobName)" : '') . " — row $rowId aggiornato (Grade=$grade, DropRate=$dropRate).";
+                $status = "success";
+
+                // Inserisci nel changelog di sessione
+                try {
+                    $pdoAdmin->exec("
+                        IF NOT EXISTS (SELECT * FROM PS_WebSite.sys.objects WHERE object_id = OBJECT_ID(N'PS_WebSite.dbo.Web_DropsEditLog') AND type = N'U')
+                        BEGIN
+                            CREATE TABLE PS_WebSite.dbo.Web_DropsEditLog (
+                                LogID INT IDENTITY(1,1) PRIMARY KEY,
+                                AdminUID INT NOT NULL, AdminID VARCHAR(32) NOT NULL,
+                                RowID INT NOT NULL, MobID INT NOT NULL, MobName NVARCHAR(100) NULL,
+                                ItemOrder TINYINT NOT NULL,
+                                OldGrade SMALLINT NULL, NewGrade SMALLINT NOT NULL,
+                                OldDropRate INT NULL, NewDropRate INT NOT NULL,
+                                ChangedAt DATETIME NOT NULL DEFAULT GETDATE()
+                            );
+                            CREATE INDEX IX_Web_DropsEditLog_AdminUID ON PS_WebSite.dbo.Web_DropsEditLog(AdminUID, ChangedAt DESC);
+                        END
+                    ");
+                    $logStmt = $pdoAdmin->prepare("INSERT INTO PS_WebSite.dbo.Web_DropsEditLog (AdminUID,AdminID,RowID,MobID,MobName,ItemOrder,OldGrade,NewGrade,OldDropRate,NewDropRate) VALUES (?,?,?,?,?,?,?,?,?,?)");
+                    $logStmt->execute([$adminUID, $username, $rowId, $mobId, $mobName, $itemOrd, $oldGrd, $grade, $oldDr, $dropRate]);
+                } catch (Throwable $e) {}
+
+                appAuditLog('admin_drops_row_update', [
+                    'admin'     => $username,
+                    'row_id'    => $rowId,
+                    'mob_id'    => $mobId,
+                    'grade'     => $grade,
+                    'drop_rate' => $dropRate,
+                ]);
+            } else {
+                $msg = "Nessuna riga aggiornata. RowID $rowId non trovato.";
+                $status = "error";
+            }
+        } catch (Throwable $e) {
+            $msg = "Errore DB durante aggiornamento drop row.";
+            $status = "error";
+        }
+        break;
+
+    case 'drops_undo_row':
+        if ($adminStatus != 16) { $msg = "Unauthorized."; $status = "error"; break; }
+        $logId = isset($_POST['log_id']) ? (int) $_POST['log_id'] : 0;
+        if ($logId <= 0) { $msg = "LogID non valido."; $status = "error"; break; }
+        if (!appRateLimitAllow('drops_edit:' . $username, 60, 60)) {
+            $msg = "Rate limit raggiunto."; $status = "error"; break;
+        }
+        try {
+            $undoFetch = $pdoAdmin->prepare("SELECT RowID, MobID, MobName, ItemOrder, OldGrade, OldDropRate, NewGrade, NewDropRate FROM PS_WebSite.dbo.Web_DropsEditLog WHERE LogID = ? AND AdminUID = ?");
+            $undoFetch->execute([$logId, $adminUID]);
+            $undoRow = $undoFetch->fetch(PDO::FETCH_ASSOC);
+            if (!$undoRow || $undoRow['OldGrade'] === null || $undoRow['OldDropRate'] === null) {
+                $msg = "Impossibile annullare: valori precedenti non disponibili.";
+                $status = "error";
+                break;
+            }
+            $undoStmt = $pdoAdmin->prepare("UPDATE PS_GameDefs.dbo.MobItems SET Grade = ?, DropRate = ? WHERE RowID = ?");
+            $undoStmt->execute([$undoRow['OldGrade'], $undoRow['OldDropRate'], $undoRow['RowID']]);
+            // Rimuovi la voce dal log (annullata)
+            $pdoAdmin->prepare("DELETE FROM PS_WebSite.dbo.Web_DropsEditLog WHERE LogID = ?")->execute([$logId]);
+            $msg = "UNDO MobID {$undoRow['MobID']} ({$undoRow['MobName']}) — Grade ripristinato a {$undoRow['OldGrade']}, DropRate a {$undoRow['OldDropRate']}.";
+            $status = "success";
+            appAuditLog('admin_drops_undo', ['admin' => $username, 'log_id' => $logId, 'row_id' => $undoRow['RowID']]);
+        } catch (Throwable $e) {
+            $msg = "Errore DB durante UNDO."; $status = "error";
+        }
+        break;
+
+    case 'drops_clear_log':
+        if ($adminStatus != 16) { $msg = "Unauthorized."; $status = "error"; break; }
+        try {
+            $pdoAdmin->prepare("DELETE FROM PS_WebSite.dbo.Web_DropsEditLog WHERE AdminUID = ?")->execute([$adminUID]);
+            $msg = "Changelog svuotato.";
+            $status = "success";
+        } catch (Throwable $e) {
+            $msg = "Errore durante pulizia log."; $status = "error";
+        }
+        break;
+
+    case 'drops_update_range':
+        if ($adminStatus != 16) {
+            $msg = "Unauthorized.";
+            $status = "error";
+            break;
+        }
+        $mobIdMin  = isset($_POST['mob_id_min'])  ? (int) $_POST['mob_id_min']  : 0;
+        $mobIdMax  = isset($_POST['mob_id_max'])  ? (int) $_POST['mob_id_max']  : 0;
+        $itemOrder = isset($_POST['item_order'])  ? (int) $_POST['item_order']  : 0;
+        $grade     = isset($_POST['grade'])       ? (int) $_POST['grade']       : 0;
+        $dropRate  = isset($_POST['drop_rate'])   ? (int) $_POST['drop_rate']   : -1;
+        if ($mobIdMin <= 0 || $mobIdMax <= 0 || $mobIdMin > $mobIdMax || $itemOrder < 1 || $itemOrder > 9 || $dropRate < 0 || $grade < 0) {
+            $msg = "Parametri range non validi.";
+            $status = "error";
+            break;
+        }
+        if (!appRateLimitAllow('drops_edit:' . $username, 60, 60)) {
+            $msg = "Rate limit raggiunto.";
+            $status = "error";
+            break;
+        }
+        try {
+            $drRangeStmt = $pdoAdmin->prepare("UPDATE PS_GameDefs.dbo.MobItems SET Grade = ?, DropRate = ? WHERE MobID BETWEEN ? AND ? AND ItemOrder = ?");
+            $drRangeStmt->execute([$grade, $dropRate, $mobIdMin, $mobIdMax, $itemOrder]);
+            $affected = $drRangeStmt->rowCount();
+            $msg = "Range aggiornato: $affected righe (MobID $mobIdMin-$mobIdMax, ItemOrder $itemOrder, Grade=$grade, DropRate=$dropRate).";
+            $status = "success";
+            appAuditLog('admin_drops_range_update', [
+                'admin'       => $username,
+                'mob_id_min'  => $mobIdMin,
+                'mob_id_max'  => $mobIdMax,
+                'item_order'  => $itemOrder,
+                'grade'       => $grade,
+                'drop_rate'   => $dropRate,
+                'rows_updated'=> $affected,
+            ]);
+        } catch (Throwable $e) {
+            $msg = "Errore DB durante range update.";
+            $status = "error";
+        }
+        break;
+
     default:
         $msg = "Invalid action.";
 }
@@ -1714,6 +1872,13 @@ if ($returnView) {
         if (isset($_POST['tab'])) {
             $redirect .= "&tab=" . urlencode($_POST['tab']);
         }
+    }
+    if ($returnView === 'DROPS_EDITOR') {
+        if (!empty($_POST['drop_filter_mob_id']))   $redirect .= "&mob_id="   . (int) $_POST['drop_filter_mob_id'];
+        if (!empty($_POST['drop_filter_mob_name']))  $redirect .= "&mob_name=" . urlencode((string) $_POST['drop_filter_mob_name']);
+        if (!empty($_POST['drop_filter_map_id']))   $redirect .= "&map_id="   . (int) $_POST['drop_filter_map_id'];
+        if (!empty($_POST['drop_filter_page']) && (int) $_POST['drop_filter_page'] > 1)
+            $redirect .= "&page=" . (int) $_POST['drop_filter_page'];
     }
 }
 header("Location: $redirect");

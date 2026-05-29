@@ -2,6 +2,9 @@
 db.php
 db_pdo.php
 
+# ─── Htdocs (non tracciare, contiene build artifacts) ───
+htdocs
+
 # ─── Logs (runtime, non tracciare) ───
 config/logs/*
 !config/logs/.gitkeep
