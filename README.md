@@ -243,6 +243,7 @@ The following security measures have been implemented in this codebase and are a
 | **XSS (Stored)** | ✅ Mitigated | News content sanitised server-side via `appSanitizeNewsRenderContent()` before HTML output. |
 | **Inline JS (CSP)** | ✅ Cleaned | `onclick`/`onchange`/`onsubmit` inline handlers removed from `admin.php`, `index.php`, `drops.php`; replaced with delegated listeners in `js/script.js`. |
 | **Directory Exposure** | ✅ Hardened | `config/`, `tools/`, `sql/`, `inc/` deny-by-default via `.htaccess`. Root blocks dotfiles/dot-directories. |
+| **Host Firewall** | ✅ Present | The live Windows server uses Simplewall. If ZAP or other scanners fail, verify that the firewall allows the required loopback/outbound requests on the live host. |
 
 ### Server-Side Hardening (XAMPP / Apache / PHP)
 
@@ -271,6 +272,10 @@ ServerSignature Off
 ```
 SSLUseStapling Off   # Disables OCSP stapling log noise (Tailscale/Let's Encrypt)
 ```
+
+**Host firewall note**
+
+The live server also runs Simplewall. For security audits that need to reach the local site or external targets, make sure the firewall policy allows the needed Apache loopback traffic and the outgoing requests required by ZAP/Nikto-style scans.
 
 ### Remaining Known Risks
 

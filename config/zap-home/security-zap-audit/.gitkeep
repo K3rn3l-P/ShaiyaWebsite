@@ -1,0 +1,4 @@
+# Placeholder per cartella runtime automation script.
+# Contiene run-* directories auto-puliti.
+# NON tracciare: db/, session/, run-*, addOnData/, ecc.
+# Tracciare SOLO configurazioni statiche in directories parallele (policies/, scripts/, reports/)

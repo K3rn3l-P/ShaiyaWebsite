@@ -6,6 +6,44 @@ db_pdo.php
 config/logs/*
 !config/logs/.gitkeep
 
+# ─── ZAP home directory: escludere TUTTO runtime ───
+!config/zap-home/security-zap-audit/.gitkeep
+config/zap-home/security-zap-audit/run-*
+config/zap-home/security-zap-audit/db
+config/zap-home/security-zap-audit/session
+config/zap-home/security-zap-audit/addOnData
+config/zap-home/security-zap-audit/hud
+config/zap-home/security-zap-audit/hudtutorial
+config/zap-home/security-zap-audit/selenium
+config/zap-home/security-zap-audit/dirbuster
+config/zap-home/security-zap-audit/transfer
+config/zap-home/security-zap-audit/lang
+config/zap-home/security-zap-audit/licenses/**
+config/zap-home/security-zap-audit/**/*.png
+config/zap-home/security-zap-audit/webdrivers
+config/zap-home/security-zap-audit/xml
+config/zap-home/security-zap-audit/**/*.png
+config/zap-home/security-zap-audit/*.log
+config/zap-home/security-zap-audit/security_zap_passive_report.json
+
+
+# ─── Tracciare CARTELLA ROOT per automation (per structure reproducibility) ───
+!config/zap-home/security-zap-audit/
+!config/zap-home/security-zap-audit/.gitkeep
+
+# ─── Tracciare SOLO configurazioni permanenti (policies, scripts, reports, config core) ───
+# Questi non cambiano e sono utilizzati da automation-script per setup iniziale
+!config/zap-home/policies/
+!config/zap-home/policies/**
+!config/zap-home/scripts/
+!config/zap-home/scripts/**
+!config/zap-home/reports/
+!config/zap-home/reports/**
+!config/zap-home/config.xml
+
+# ─── Cartella legacy (deprecata, escludere completamente) ───
+config/zap-home/security-zap-audit-legacy/**
+
 # ─── Uploads (user-generated content) ───
 uploads/news/*
 !uploads/news/.gitkeep

@@ -18,6 +18,9 @@ ServerSignature Off
     Require all denied
 </FilesMatch>
 
+# Blocca accesso a mod_status (Apache diagnostics endpoints) via RewriteRule (LocationMatch non consentiito in .htaccess)
+RewriteRule "^(server-status|server-info)" - [F,L]
+
 <FilesMatch "^(composer\.(json|lock)|phpunit\.xml|\.megaignore)$">
     Require all denied
 </FilesMatch>
@@ -39,6 +42,11 @@ ServerSignature Off
 
 <IfModule mod_rewrite.c>
     RewriteEngine On
+
+    # HTTP -> HTTPS redirect (solo GET/HEAD per non alterare POST)
+    RewriteCond %{HTTPS} off
+    RewriteCond %{REQUEST_METHOD} ^(?:GET|HEAD|OPTIONS)$
+    RewriteRule ^(.*)$ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
 
     # Blocca accesso a dotfiles/dot-directories (es. .github, .env), eccetto ACME challenge
     RewriteRule "(^|/)\.(?!well-known/)" - [F,L]

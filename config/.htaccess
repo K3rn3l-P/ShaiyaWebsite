@@ -1,5 +1,6 @@
 Options -Indexes
 
+# ─── Nega accesso a TUTTI i file in config/ (incluso zap-home/, db.php legacy, logs, etc.) ───
 <FilesMatch ".*">
     Require all denied
 </FilesMatch>
