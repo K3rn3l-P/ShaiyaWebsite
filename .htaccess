@@ -2,16 +2,10 @@ Options -Indexes
 ServerSignature Off
 
 <IfModule mod_headers.c>
-    Header always set X-Content-Type-Options "nosniff"
-    Header always set X-Frame-Options "DENY"
-    Header always set Referrer-Policy "strict-origin-when-cross-origin"
-    Header always set Permissions-Policy "geolocation=(), microphone=(), camera=()"
-    Header always set X-Permitted-Cross-Domain-Policies "none"
+    # PHP sets all security headers via appApplySecurityHeaders() for every 200 response.
+    # In XAMPP/mod_php, Header set/setifempty cannot override PHP headers set later in the
+    # request cycle, causing duplicates. Only unset X-Powered-By here as a safety net.
     Header always unset X-Powered-By
-
-    <If "%{HTTPS} == 'on'">
-        Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains"
-    </If>
 </IfModule>
 
 <FilesMatch "^\.(env|git|htaccess)">

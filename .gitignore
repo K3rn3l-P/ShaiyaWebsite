@@ -24,6 +24,7 @@ config/zap-home/security-zap-audit/webdrivers
 config/zap-home/security-zap-audit/xml
 config/zap-home/security-zap-audit/**/*.png
 config/zap-home/security-zap-audit/*.log
+config/zap-home/security-zap-audit/jbrofuzz/*log.*
 config/zap-home/security-zap-audit/security_zap_passive_report.json
 
 

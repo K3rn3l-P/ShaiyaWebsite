@@ -436,14 +436,14 @@ if (!hasAdminAccess($current_view)) {
 }
 
 // --- Handle Admin Actions ---
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['admin_action'])) {
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && (isset($_POST['admin_action']) || isset($_POST['action']))) {
     if (!appVerifyCsrfToken((string) ($_POST['csrf_token'] ?? ''))) {
         $_SESSION['admin_error'] = 'Invalid security token. Please refresh and try again.';
         header('Location: /admin');
         exit;
     }
 
-    $action = $_POST['admin_action'];
+    $action = $_POST['admin_action'] ?? $_POST['action'];
     $charID = isset($_POST['char_id']) ? (int) $_POST['char_id'] : 0;
 
     if ($action === 'save_permissions') {

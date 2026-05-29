@@ -284,6 +284,8 @@ $luckyChestEnabled = fetchWebsiteSettings(['LuckyChestEnabled'])['LuckyChestEnab
             return div;
         }
 
+        const csrfToken = <?php echo json_encode($_SESSION['csrf_token'] ?? ''); ?>;
+
         document.getElementById('btnOpen').addEventListener('click', function () {
             const btn = this;
             const msgBox = document.getElementById('result-msg');
@@ -292,7 +294,11 @@ $luckyChestEnabled = fetchWebsiteSettings(['LuckyChestEnabled'])['LuckyChestEnab
             btn.disabled = true;
             msgBox.innerHTML = '<span style="color:#aaa;">Connecting to server...</span>';
 
-            fetch('/lucky_case_api')
+            fetch('/lucky_case_api', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: 'csrf_token=' + encodeURIComponent(csrfToken)
+            })
                 .then(res => res.json())
                 .then(data => {
                     if (!data.success) {

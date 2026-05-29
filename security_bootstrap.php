@@ -128,7 +128,8 @@ function appBuildCspHeader(): string
         "object-src 'none'",
         "form-action 'self'",
         "script-src 'self' 'nonce-{$nonce}' https://cdn.quilljs.com https://cdnjs.cloudflare.com",
-        "style-src 'self' 'unsafe-inline' https://cdn.quilljs.com https://cdnjs.cloudflare.com https://fonts.googleapis.com",
+        "style-src 'self' 'nonce-{$nonce}' https://cdn.quilljs.com https://cdnjs.cloudflare.com https://fonts.googleapis.com",
+        "style-src-attr 'unsafe-inline'",
         "font-src 'self' data: https://cdnjs.cloudflare.com https://fonts.gstatic.com",
         "img-src 'self' data: https:",
         "connect-src 'self' https://cdn.quilljs.com",
@@ -148,6 +149,7 @@ function appBuildStrictCspReportOnlyHeader(): string
         "form-action 'self'",
         "script-src 'self' 'nonce-{$nonce}' https://cdn.quilljs.com https://cdnjs.cloudflare.com",
         "style-src 'self' 'nonce-{$nonce}' https://cdn.quilljs.com https://cdnjs.cloudflare.com https://fonts.googleapis.com",
+        "style-src-attr 'unsafe-inline'",
         "font-src 'self' data: https://cdnjs.cloudflare.com https://fonts.gstatic.com",
         "img-src 'self' data: https:",
         "connect-src 'self' https://cdn.quilljs.com",
@@ -164,14 +166,15 @@ function appApplySecurityHeaders(): void
 
     header('X-Content-Type-Options: nosniff');
     header('X-Frame-Options: DENY');
-    header('X-XSS-Protection: 1; mode=block');
+    header('X-XSS-Protection: 0');
     header('Referrer-Policy: strict-origin-when-cross-origin');
     header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
+    header('X-Permitted-Cross-Domain-Policies: none');
     header('Content-Security-Policy: ' . appBuildCspHeader());
     header('Content-Security-Policy-Report-Only: ' . appBuildStrictCspReportOnlyHeader());
 
     if (appIsHttps()) {
-        header('Strict-Transport-Security: max-age=31536000; includeSubDomains');
+        header('Strict-Transport-Security: max-age=31536000; includeSubDomains; preload');
     }
 }
 
