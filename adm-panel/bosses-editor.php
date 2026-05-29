@@ -73,14 +73,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['boss_action'])) {
         $sort    = (int)($_POST['sort_order'] ?? 0);
         $active  = isset($_POST['is_active']) ? 1 : 0;
 
+        $newMapId = (isset($_POST['mobs_map_id']) && $_POST['mobs_map_id'] !== '')
+            ? (int)$_POST['mobs_map_id'] : null;
+
         if ($bossId > 0 && $mobId > 0 && $respawn > 0) {
             try {
                 $stmt = $pdoAdmin->prepare(
                     "UPDATE PS_WebSite.dbo.Web_Bosses SET MobID=?, RespawnSeconds=?, Notes=?, SortOrder=?, IsActive=? WHERE BossID=?"
                 );
                 $stmt->execute([$mobId, $respawn, $notes ?: null, $sort, $active, $bossId]);
-                appAuditLog('bosses_editor_update', ['boss_id'=>$bossId,'mob_id'=>$mobId,'admin'=>$username]);
-                $_SESSION['admin_success'] = "Boss #$bossId aggiornato.";
+
+                // Aggiorna MapID in PS_GameDefs.dbo.Mobs se specificato
+                if ($newMapId !== null) {
+                    $stmtMap = $pdoAdmin->prepare(
+                        "UPDATE PS_GameDefs.dbo.Mobs SET MapID = ? WHERE MobID = ?"
+                    );
+                    $stmtMap->execute([$newMapId, $mobId]);
+                }
+
+                appAuditLog('bosses_editor_update', [
+                    'boss_id'     => $bossId,
+                    'mob_id'      => $mobId,
+                    'new_map_id'  => $newMapId,
+                    'admin'       => $username,
+                ]);
+                $_SESSION['admin_success'] = "Boss #$bossId aggiornato." . ($newMapId !== null ? " MapID → $newMapId" : '');
             } catch (Throwable $e) {
                 $_SESSION['admin_error'] = 'Update fallito: ' . htmlspecialchars($e->getMessage());
             }
@@ -341,7 +358,8 @@ $statTotal = $statActive + $statInactive;
                 <th style="width:75px">MobID</th>
                 <th style="min-width:120px">Nome DB</th>
                 <th style="width:45px">Lvl</th>
-                <th style="min-width:110px">Mappa</th>
+                <th style="width:62px">MapID</th>
+                <th style="min-width:100px">Mappa (DB)</th>
                 <th style="width:85px">Fazione</th>
                 <th style="width:120px">Respawn (sec)</th>
                 <th style="width:55px">Sort</th>
@@ -394,7 +412,15 @@ $statTotal = $statActive + $statInactive;
                 <?php endif; ?>
             </td>
             <td style="color:#aaa;font-size:12px;"><?php echo $level ?? '<span style="color:#555">?</span>'; ?></td>
-            <td style="color:#bbb;font-size:12px;"><?php echo $mapName ?? "<span style='color:#555'>Map #$mapId</span>"; ?></td>
+            <td>
+                <input type="number" class="be-input-sm" name="mobs_map_id"
+                       value="<?php echo $mapId > 0 ? $mapId : ''; ?>"
+                       min="0" placeholder="—" style="width:54px;"
+                       title="Scrive su PS_GameDefs.dbo.Mobs.MapID">
+            </td>
+            <td style="color:#888;font-size:12px;white-space:nowrap;">
+                <?php echo $mapName ? $mapName : "<span style='color:#444'>—</span>"; ?>
+            </td>
             <td><?php echo $fBadge; ?></td>
             <td>
                 <input type="number" class="be-input-sm" name="respawn_seconds" value="<?php echo $respawn; ?>" min="1" style="width:100px;">
