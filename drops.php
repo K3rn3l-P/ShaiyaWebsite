@@ -158,8 +158,14 @@ if (isset($_GET['itemid']) && !empty($_GET['itemid'])) {
             // Apply zero drop filter if enabled
             $zero_drop_condition = $config_hide_zero_drops ? " AND mi.DropRate > 0" : "";
             
-            // Count total drops for pagination
-            $count_query = "SELECT COUNT(*) as Total FROM PS_GameDefs.dbo.MobItems AS mi WHERE mi.Grade = ?" . $zero_drop_condition;
+            // Count total drops for pagination — must use same JOINs as the drop query
+            // (INNER JOIN Mobs + JOIN MapNames) so mobs without a MapNames entry are
+            // excluded from the count, otherwise $total_pages is inflated and last pages are empty.
+            $count_query = "SELECT COUNT(*) as Total
+                            FROM PS_GameDefs.dbo.MobItems AS mi
+                            INNER JOIN PS_GameDefs.dbo.Mobs AS m ON m.MobID = mi.MobID
+                            JOIN PS_GameDefs.dbo.MapNames AS mn ON m.MapID = mn.MapID
+                            WHERE mi.Grade = ?" . $zero_drop_condition;
             $total_drops = 0;
             try {
                 $stmt_count = $pdoAdmin->prepare($count_query);
@@ -245,6 +251,14 @@ $elements = array(0 => 'None', 1 => 'Fire', 2 => 'Water', 3 => 'Earth', 4 => 'Wi
         .map-hover:hover .map-tooltip {
             visibility: visible;
             opacity: 1;
+        }
+        /* Inside modal: overflow-y:auto clips absolute tooltips → use fixed + JS positioning */
+        #drops-modal-body .map-hover .map-tooltip {
+            position: fixed;
+            bottom: auto;
+            top: 0;
+            left: 0;
+            z-index: 999999;
         }
         .map-hover .map-tooltip img {
             display: block;
@@ -437,6 +451,78 @@ $elements = array(0 => 'None', 1 => 'Fire', 2 => 'Water', 3 => 'Earth', 4 => 'Wi
         .page-jump-input:focus {
             border-color: var(--text-gold);
         }
+        /* ===== DROPS MODAL ===== */
+        #drops-modal-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.88);
+            z-index: 9999;
+            align-items: flex-start;
+            justify-content: center;
+            padding: 50px 20px 30px;
+            overflow-y: auto;
+        }
+        #drops-modal-overlay.active {
+            display: flex;
+        }
+        #drops-modal-box {
+            background: #0d0d0d;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            width: 100%;
+            max-width: 880px;
+            box-shadow: 0 8px 40px rgba(0,0,0,0.9);
+            flex-shrink: 0;
+            animation: modalIn 0.2s ease;
+        }
+        @keyframes modalIn {
+            from { opacity: 0; transform: translateY(-14px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+        #drops-modal-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 15px;
+            padding: 18px 24px;
+            border-bottom: 1px solid rgba(200,160,90,0.2);
+            background: linear-gradient(to bottom, #1a1a1a, #0d0d0d);
+            border-radius: 6px 6px 0 0;
+        }
+        #drops-modal-body {
+            padding: 24px;
+            max-height: 65vh;
+            overflow-y: auto;
+        }
+        #drops-modal-body::-webkit-scrollbar { width: 6px; }
+        #drops-modal-body::-webkit-scrollbar-track { background: rgba(255,255,255,0.04); }
+        #drops-modal-body::-webkit-scrollbar-thumb { background: rgba(200,160,90,0.4); border-radius: 3px; }
+        #drops-modal-close {
+            background: none;
+            border: 1px solid rgba(200,160,90,0.3);
+            color: var(--text-gold);
+            width: 32px;
+            height: 32px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 15px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+            flex-shrink: 0;
+        }
+        #drops-modal-close:hover {
+            background: rgba(200,160,90,0.15);
+            border-color: var(--text-gold);
+        }
+        .modal-header-actions {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-shrink: 0;
+        }
     </style>
 </head>
 <body>
@@ -559,238 +645,6 @@ $elements = array(0 => 'None', 1 => 'Fire', 2 => 'Water', 3 => 'Earth', 4 => 'Wi
                     </div>
                 <?php endif; ?>
 
-                <?php if ($item_drops !== null): ?>
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 1px solid rgba(200, 160, 90, 0.2); padding-bottom: 10px;">
-                        <h3 style="color: var(--text-gold); margin: 0; font-size: 18px;">
-                            <i class="fas fa-crosshairs" style="margin-right: 8px;"></i>
-                            Monsters dropping: <span style="color: #fff;"><?php echo htmlspecialchars(mb_convert_encoding($selected_item_name, 'UTF-8', 'ISO-8859-1')); ?></span>
-                        </h3>
-                        <?php if (isset($_GET['search'])): ?>
-                        <form action="<?php echo htmlspecialchars($_SERVER['PHP_SELF']); ?>" method="get" style="margin: 0;">
-                            <input type="hidden" name="search" value="<?php echo htmlspecialchars($_GET['search']); ?>">
-                            <button type="submit" class="back-btn" style="margin: 0;"><i class="fas fa-arrow-left"></i> Back to Results</button>
-                        </form>
-                        <?php else: ?>
-                        <a href="/drops" class="back-btn" style="margin: 0;"><i class="fas fa-arrow-left"></i> New Search</a>
-                        <?php endif; ?>
-                    </div>
-                    
-                    <?php if (count($item_drops) > 0): ?>
-                        <table class="results-table">
-                            <thead>
-                                <tr>
-                                    <th>Map</th>
-                                    <th>Monster Name</th>
-                                    <th>HP</th>
-                                    <th>Level</th>
-                                    <th>Element</th>
-                                    <th>Drop Rate</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <?php foreach ($item_drops as $drop): ?>
-                                    <tr>
-                                        <td>
-                                            <div class="map-hover">
-                                                <i class="fas fa-map-marker-alt" style="color: var(--text-gold); font-size: 12px; margin-right: 5px;"></i> <?php echo htmlspecialchars($drop['MapName']); ?>
-                                                <div class="map-tooltip">
-                                                    <img src="assets/minimaps/<?php echo $drop['MapID']; ?>.webp" alt="Map" class="js-hide-onerror">
-                                                </div>
-                                            </div>
-                                        </td>
-                                        <td><strong><?php echo htmlspecialchars(mb_convert_encoding($drop['MobName'], 'UTF-8', 'ISO-8859-1')); ?></strong></td>
-                                        <td><?php echo number_format($drop['HP'], 0, '.', ','); ?></td>
-                                        <td><?php echo $drop['Level']; ?></td>
-                                        <td>
-                                            <?php 
-                                            echo $elements[$drop['Attrib']];
-                                            if (file_exists('assets/ele_' . $drop['Attrib'] . '.png')) {
-                                                echo ' <img src="assets/ele_' . $drop['Attrib'] . '.png" class="ele-icon" alt="element">';
-                                            }
-                                            ?>
-                                        </td>
-                                        <td>
-                                            <?php
-                                            $DropRate = $drop['DropRate'];
-                                            if ($drop['ItemOrder'] > 4) {
-                                                $DropRate = ($DropRate / 100000);
-                                            }
-                                            if ($DropRate > 100) {
-                                                $DropRate = 100;
-                                            }
-                                            echo '<span style="color: #a8d08d;">' . rtrim(rtrim(number_format($DropRate, 4), '0'), '.') . '%</span>';
-                                            ?>
-                                        </td>
-                                    </tr>
-                                <?php endforeach; ?>
-                            </tbody>
-                        </table>
-                        
-                        <?php if ($total_pages > 1): ?>
-                        <form action="<?php echo htmlspecialchars($_SERVER['PHP_SELF']); ?>" method="get" style="margin: 0; margin-bottom: 20px;">
-                            <input type="hidden" name="itemid" value="<?php echo (int)$_GET['itemid']; ?>">
-                            <?php if (isset($_GET['search'])): ?>
-                            <input type="hidden" name="search" value="<?php echo htmlspecialchars($_GET['search']); ?>">
-                            <?php endif; ?>
-                            
-                            <div class="pagination-container">
-                                <?php if ($page > 1): ?>
-                                    <button type="submit" name="page" value="<?php echo $page - 1; ?>" class="page-link" title="Previous"><i class="fas fa-chevron-left" style="margin-right: 5px;"></i> Prev</button>
-                                <?php endif; ?>
-                                
-                                <?php 
-                                $start_page = max(1, $page - 2);
-                                $end_page = min($total_pages, $page + 2);
-                                
-                                if ($start_page > 1) {
-                                    echo '<button type="submit" name="page" value="1" class="page-link">1</button>';
-                                    if ($start_page > 2) {
-                                        echo '<span class="page-ellipsis">...</span>';
-                                    }
-                                }
-                                
-                                for ($i = $start_page; $i <= $end_page; $i++) {
-                                    if ($i == $page) {
-                                        echo '<span class="page-active">' . $i . '</span>';
-                                    } else {
-                                        echo '<button type="submit" name="page" value="' . $i . '" class="page-link">' . $i . '</button>';
-                                    }
-                                }
-                                
-                                if ($end_page < $total_pages) {
-                                    if ($end_page < $total_pages - 1) {
-                                        echo '<span class="page-ellipsis">...</span>';
-                                    }
-                                    echo '<button type="submit" name="page" value="' . $total_pages . '" class="page-link">' . $total_pages . '</button>';
-                                }
-                                ?>
-                                
-                                <?php if ($page < $total_pages): ?>
-                                    <button type="submit" name="page" value="<?php echo $page + 1; ?>" class="page-link" title="Next">Next <i class="fas fa-chevron-right" style="margin-left: 5px;"></i></button>
-                                <?php endif; ?>
-                            </div>
-                        </form>
-                        <?php endif; ?>
-                    <?php else: ?>
-                        <div class="empty-state">
-                            <i class="fas fa-ghost fa-3x" style="margin-bottom: 20px;"></i>
-                            <p style="font-size: 18px; color: var(--text-gold);">No Dropping Monsters</p>
-                            <p style="font-size: 14px; margin-top: 10px;">This item currently doesn't drop from any monster, or is only available from quests/mall.</p>
-                        </div>
-                    <?php endif; ?>
-                <?php endif; ?>
-
-                <?php if ($mob_drops !== null): ?>
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 1px solid rgba(200, 160, 90, 0.2); padding-bottom: 10px;">
-                        <h3 style="color: var(--text-gold); margin: 0; font-size: 18px;">
-                            <i class="fas fa-gift" style="margin-right: 8px;"></i>
-                            Loot Table: <span style="color: #fff;"><?php echo htmlspecialchars(mb_convert_encoding($selected_mob_name, 'UTF-8', 'ISO-8859-1')); ?></span>
-                        </h3>
-                        <?php if (isset($_GET['search'])): ?>
-                        <form action="<?php echo htmlspecialchars($_SERVER['PHP_SELF']); ?>" method="get" style="margin: 0;">
-                            <input type="hidden" name="search" value="<?php echo htmlspecialchars($_GET['search']); ?>">
-                            <button type="submit" class="back-btn" style="margin: 0;"><i class="fas fa-arrow-left"></i> Back to Results</button>
-                        </form>
-                        <?php else: ?>
-                        <a href="/drops" class="back-btn" style="margin: 0;"><i class="fas fa-arrow-left"></i> New Search</a>
-                        <?php endif; ?>
-                    </div>
-                    
-                    <?php if (count($mob_drops) > 0): ?>
-                        <table class="results-table">
-                            <thead>
-                                <tr>
-                                    <th>Item Name</th>
-                                    <th>Required Level</th>
-                                    <th>Linkable Slots</th>
-                                    <th style="text-align: right;">Drop Rate</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <?php foreach ($mob_drops as $drop): ?>
-                                    <tr>
-                                        <td><strong><?php echo htmlspecialchars(mb_convert_encoding($drop['ItemName'], 'UTF-8', 'ISO-8859-1')); ?></strong></td>
-                                        <td><?php echo $drop['ReqLevel']; ?></td>
-                                        <td>
-                                            <?php 
-                                            if ($drop['Slot'] == 0) {
-                                                echo '<span style="color: rgba(255,255,255,0.4); font-size: 13px;">Not linkable</span>';
-                                            } else {
-                                                echo '<span style="color: var(--text-gold);">' . $drop['Slot'] . '</span>';
-                                            }
-                                            ?>
-                                        </td>
-                                        <td style="text-align: right;">
-                                            <?php
-                                            $DropRate = $drop['DropRate'];
-                                            if ($drop['ItemOrder'] > 4) {
-                                                $DropRate = ($DropRate / 100000);
-                                            }
-                                            if ($DropRate > 100) {
-                                                $DropRate = 100;
-                                            }
-                                            echo '<span style="color: #a8d08d;">' . rtrim(rtrim(number_format($DropRate, 4), '0'), '.') . '%</span>';
-                                            ?>
-                                        </td>
-                                    </tr>
-                                <?php endforeach; ?>
-                            </tbody>
-                        </table>
-                        
-                        <?php if ($total_pages > 1): ?>
-                        <form action="<?php echo htmlspecialchars($_SERVER['PHP_SELF']); ?>" method="get" style="margin: 0; margin-bottom: 20px;">
-                            <input type="hidden" name="mobid" value="<?php echo (int)$_GET['mobid']; ?>">
-                            <?php if (isset($_GET['search'])): ?>
-                            <input type="hidden" name="search" value="<?php echo htmlspecialchars($_GET['search']); ?>">
-                            <?php endif; ?>
-                            
-                            <div class="pagination-container">
-                                <?php if ($page > 1): ?>
-                                    <button type="submit" name="page" value="<?php echo $page - 1; ?>" class="page-link" title="Previous"><i class="fas fa-chevron-left" style="margin-right: 5px;"></i> Prev</button>
-                                <?php endif; ?>
-                                
-                                <?php 
-                                $start_page = max(1, $page - 2);
-                                $end_page = min($total_pages, $page + 2);
-                                
-                                if ($start_page > 1) {
-                                    echo '<button type="submit" name="page" value="1" class="page-link">1</button>';
-                                    if ($start_page > 2) {
-                                        echo '<span class="page-ellipsis">...</span>';
-                                    }
-                                }
-                                
-                                for ($i = $start_page; $i <= $end_page; $i++) {
-                                    if ($i == $page) {
-                                        echo '<span class="page-active">' . $i . '</span>';
-                                    } else {
-                                        echo '<button type="submit" name="page" value="' . $i . '" class="page-link">' . $i . '</button>';
-                                    }
-                                }
-                                
-                                if ($end_page < $total_pages) {
-                                    if ($end_page < $total_pages - 1) {
-                                        echo '<span class="page-ellipsis">...</span>';
-                                    }
-                                    echo '<button type="submit" name="page" value="' . $total_pages . '" class="page-link">' . $total_pages . '</button>';
-                                }
-                                ?>
-                                
-                                <?php if ($page < $total_pages): ?>
-                                    <button type="submit" name="page" value="<?php echo $page + 1; ?>" class="page-link" title="Next">Next <i class="fas fa-chevron-right" style="margin-left: 5px;"></i></button>
-                                <?php endif; ?>
-                            </div>
-                        </form>
-                        <?php endif; ?>
-                    <?php else: ?>
-                        <div class="empty-state">
-                            <i class="fas fa-ghost fa-3x" style="margin-bottom: 20px;"></i>
-                            <p style="font-size: 18px; color: var(--text-gold);">No Drops Found</p>
-                            <p style="font-size: 14px; margin-top: 10px;">This monster currently doesn't drop any items.</p>
-                        </div>
-                    <?php endif; ?>
-                <?php endif; ?>
-
                 <?php if ($search_results === null && $mob_search_results === null && $item_drops === null && $mob_drops === null): ?>
                     <div class="empty-state">
                         <i class="fas fa-search-dollar fa-3x" style="margin-bottom: 20px;"></i>
@@ -803,5 +657,266 @@ $elements = array(0 => 'None', 1 => 'Fire', 2 => 'Water', 3 => 'Earth', 4 => 'Wi
     </div>
     
     <?php include 'modules/footer.php'; ?>
+
+<?php
+// Render modal whenever itemid/mobid is in URL — JS controls visibility.
+// Using URL params (not $item_drops/$mob_drops state) avoids the case where
+// the paginated query returns 0 rows and $item_drops stays null, which would
+// cause getElementById('drops-modal-overlay') to return null and the modal
+// to silently not reopen after pagination reload.
+$_showDropsModal = (isset($_GET['itemid']) && (int)$_GET['itemid'] > 0)
+                || (isset($_GET['mobid']) && (int)$_GET['mobid'] > 0);
+?>
+<?php if ($_showDropsModal): ?>
+<div id="drops-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="drops-modal-title">
+    <div id="drops-modal-box">
+        <div id="drops-modal-header">
+            <h3 id="drops-modal-title" style="color:var(--text-gold);margin:0;font-size:17px;line-height:1.3;min-width:0;">
+                <?php if ($selected_item_name !== null): ?>
+                    <i class="fas fa-crosshairs" style="margin-right:8px;opacity:0.8;"></i>Monsters dropping:
+                    <span style="color:#fff;"><?php echo htmlspecialchars(mb_convert_encoding($selected_item_name, 'UTF-8', 'ISO-8859-1')); ?></span>
+                <?php elseif ($selected_mob_name !== null): ?>
+                    <i class="fas fa-gift" style="margin-right:8px;opacity:0.8;"></i>Loot Table:
+                    <span style="color:#fff;"><?php echo htmlspecialchars(mb_convert_encoding($selected_mob_name, 'UTF-8', 'ISO-8859-1')); ?></span>
+                <?php elseif (isset($_GET['itemid'])): ?>
+                    <i class="fas fa-crosshairs" style="margin-right:8px;opacity:0.8;"></i>Item Drops
+                <?php else: ?>
+                    <i class="fas fa-gift" style="margin-right:8px;opacity:0.8;"></i>Loot Table
+                <?php endif; ?>
+            </h3>
+            <div class="modal-header-actions">
+                <?php if (isset($_GET['search'])): ?>
+                <form action="<?php echo htmlspecialchars($_SERVER['PHP_SELF']); ?>" method="get" style="margin:0;">
+                    <input type="hidden" name="search" value="<?php echo htmlspecialchars($_GET['search']); ?>">
+                    <button type="submit" class="back-btn" style="margin:0;padding:6px 14px;font-size:12px;"><i class="fas fa-arrow-left" style="margin-right:5px;"></i>Back</button>
+                </form>
+                <?php else: ?>
+                <a href="/drops" class="back-btn" style="margin:0;padding:6px 14px;font-size:12px;"><i class="fas fa-arrow-left" style="margin-right:5px;"></i>Search</a>
+                <?php endif; ?>
+                <button id="drops-modal-close" aria-label="Close" title="Close (ESC)"><i class="fas fa-times"></i></button>
+            </div>
+        </div>
+
+        <div id="drops-modal-body">
+
+        <?php if ($item_drops !== null): ?>
+            <?php if (count($item_drops) > 0): ?>
+            <table class="results-table">
+                <thead>
+                    <tr>
+                        <th>Map</th>
+                        <th>Monster Name</th>
+                        <th>HP</th>
+                        <th>Level</th>
+                        <th>Element</th>
+                        <th>Drop Rate</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php foreach ($item_drops as $drop): ?>
+                    <tr>
+                        <td>
+                            <div class="map-hover">
+                                <i class="fas fa-map-marker-alt" style="color:var(--text-gold);font-size:12px;margin-right:5px;"></i><?php echo htmlspecialchars($drop['MapName']); ?>
+                                <div class="map-tooltip">
+                                    <img src="assets/minimaps/<?php echo $drop['MapID']; ?>.webp" alt="Map" class="js-hide-onerror">
+                                </div>
+                            </div>
+                        </td>
+                        <td><strong><?php echo htmlspecialchars(mb_convert_encoding($drop['MobName'], 'UTF-8', 'ISO-8859-1')); ?></strong></td>
+                        <td><?php echo number_format($drop['HP'], 0, '.', ','); ?></td>
+                        <td><?php echo $drop['Level']; ?></td>
+                        <td>
+                            <?php
+                            echo $elements[$drop['Attrib']];
+                            if (file_exists('assets/ele_' . $drop['Attrib'] . '.png')) {
+                                echo ' <img src="assets/ele_' . $drop['Attrib'] . '.png" class="ele-icon" alt="element">';
+                            }
+                            ?>
+                        </td>
+                        <td>
+                            <?php
+                            $DropRate = $drop['DropRate'];
+                            if ($drop['ItemOrder'] > 4) $DropRate = $DropRate / 100000;
+                            if ($DropRate > 100) $DropRate = 100;
+                            echo '<span style="color:#a8d08d;">' . rtrim(rtrim(number_format($DropRate, 4), '0'), '.') . '%</span>';
+                            ?>
+                        </td>
+                    </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+            <?php if ($total_pages > 1): ?>
+            <form action="<?php echo htmlspecialchars($_SERVER['PHP_SELF']); ?>" method="get" style="margin:0;margin-top:20px;">
+                <input type="hidden" name="itemid" value="<?php echo (int)$_GET['itemid']; ?>">
+                <?php if (isset($_GET['search'])): ?><input type="hidden" name="search" value="<?php echo htmlspecialchars($_GET['search']); ?>"><?php endif; ?>
+                <div class="pagination-container">
+                    <?php if ($page > 1): ?><button type="submit" name="page" value="<?php echo $page - 1; ?>" class="page-link"><i class="fas fa-chevron-left" style="margin-right:5px;"></i>Prev</button><?php endif; ?>
+                    <?php
+                    $start_page = max(1, $page - 2); $end_page = min($total_pages, $page + 2);
+                    if ($start_page > 1) { echo '<button type="submit" name="page" value="1" class="page-link">1</button>'; if ($start_page > 2) echo '<span class="page-ellipsis">...</span>'; }
+                    for ($i = $start_page; $i <= $end_page; $i++) {
+                        echo ($i == $page) ? '<span class="page-active">'.$i.'</span>' : '<button type="submit" name="page" value="'.$i.'" class="page-link">'.$i.'</button>';
+                    }
+                    if ($end_page < $total_pages) { if ($end_page < $total_pages - 1) echo '<span class="page-ellipsis">...</span>'; echo '<button type="submit" name="page" value="'.$total_pages.'" class="page-link">'.$total_pages.'</button>'; }
+                    ?>
+                    <?php if ($page < $total_pages): ?><button type="submit" name="page" value="<?php echo $page + 1; ?>" class="page-link">Next<i class="fas fa-chevron-right" style="margin-left:5px;"></i></button><?php endif; ?>
+                </div>
+            </form>
+            <?php endif; ?>
+            <?php else: ?>
+            <div class="empty-state">
+                <i class="fas fa-ghost fa-3x" style="margin-bottom:20px;"></i>
+                <p style="font-size:18px;color:var(--text-gold);">No Dropping Monsters</p>
+                <p style="font-size:14px;margin-top:10px;">This item currently doesn't drop from any monster, or is only available from quests/mall.</p>
+            </div>
+            <?php endif; ?>
+        <?php endif; ?>
+
+        <?php if ($mob_drops !== null): ?>
+            <?php if (count($mob_drops) > 0): ?>
+            <table class="results-table">
+                <thead>
+                    <tr>
+                        <th>Item Name</th>
+                        <th>Required Level</th>
+                        <th>Linkable Slots</th>
+                        <th style="text-align:right;">Drop Rate</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php foreach ($mob_drops as $drop): ?>
+                    <tr>
+                        <td><strong><?php echo htmlspecialchars(mb_convert_encoding($drop['ItemName'], 'UTF-8', 'ISO-8859-1')); ?></strong></td>
+                        <td><?php echo $drop['ReqLevel']; ?></td>
+                        <td>
+                            <?php
+                            if ($drop['Slot'] == 0) echo '<span style="color:rgba(255,255,255,0.4);font-size:13px;">Not linkable</span>';
+                            else echo '<span style="color:var(--text-gold);">' . $drop['Slot'] . '</span>';
+                            ?>
+                        </td>
+                        <td style="text-align:right;">
+                            <?php
+                            $DropRate = $drop['DropRate'];
+                            if ($drop['ItemOrder'] > 4) $DropRate = $DropRate / 100000;
+                            if ($DropRate > 100) $DropRate = 100;
+                            echo '<span style="color:#a8d08d;">' . rtrim(rtrim(number_format($DropRate, 4), '0'), '.') . '%</span>';
+                            ?>
+                        </td>
+                    </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+            <?php if ($total_pages > 1): ?>
+            <form action="<?php echo htmlspecialchars($_SERVER['PHP_SELF']); ?>" method="get" style="margin:0;margin-top:20px;">
+                <input type="hidden" name="mobid" value="<?php echo (int)$_GET['mobid']; ?>">
+                <?php if (isset($_GET['search'])): ?><input type="hidden" name="search" value="<?php echo htmlspecialchars($_GET['search']); ?>"><?php endif; ?>
+                <div class="pagination-container">
+                    <?php if ($page > 1): ?><button type="submit" name="page" value="<?php echo $page - 1; ?>" class="page-link"><i class="fas fa-chevron-left" style="margin-right:5px;"></i>Prev</button><?php endif; ?>
+                    <?php
+                    $start_page = max(1, $page - 2); $end_page = min($total_pages, $page + 2);
+                    if ($start_page > 1) { echo '<button type="submit" name="page" value="1" class="page-link">1</button>'; if ($start_page > 2) echo '<span class="page-ellipsis">...</span>'; }
+                    for ($i = $start_page; $i <= $end_page; $i++) {
+                        echo ($i == $page) ? '<span class="page-active">'.$i.'</span>' : '<button type="submit" name="page" value="'.$i.'" class="page-link">'.$i.'</button>';
+                    }
+                    if ($end_page < $total_pages) { if ($end_page < $total_pages - 1) echo '<span class="page-ellipsis">...</span>'; echo '<button type="submit" name="page" value="'.$total_pages.'" class="page-link">'.$total_pages.'</button>'; }
+                    ?>
+                    <?php if ($page < $total_pages): ?><button type="submit" name="page" value="<?php echo $page + 1; ?>" class="page-link">Next<i class="fas fa-chevron-right" style="margin-left:5px;"></i></button><?php endif; ?>
+                </div>
+            </form>
+            <?php endif; ?>
+            <?php else: ?>
+            <div class="empty-state">
+                <i class="fas fa-ghost fa-3x" style="margin-bottom:20px;"></i>
+                <p style="font-size:18px;color:var(--text-gold);">No Drops Found</p>
+                <p style="font-size:14px;margin-top:10px;">This monster currently doesn't drop any items.</p>
+            </div>
+            <?php endif; ?>
+        <?php endif; ?>
+
+        <?php if ($item_drops === null && $mob_drops === null && $_showDropsModal): ?>
+            <div class="empty-state">
+                <i class="fas fa-ghost fa-3x" style="margin-bottom:20px;"></i>
+                <p style="font-size:18px;color:var(--text-gold);">No Drops Found</p>
+                <p style="font-size:14px;margin-top:10px;">No drop data available for this selection.</p>
+            </div>
+        <?php endif; ?>
+
+        </div><!-- #drops-modal-body -->
+    </div><!-- #drops-modal-box -->
+</div><!-- #drops-modal-overlay -->
+<?php endif; // $_showDropsModal ?>
+
+<script>
+(function () {
+    /* ---- Smart map-tooltip positioning (solo dentro il modal, dove overflow-y:auto clippa) ---- */
+    var MINIMAP_PX = <?php echo (int)$config_minimap_size; ?> + 12; // image + padding*2
+
+    function positionMapTooltip(hoverEl) {
+        var tooltip = hoverEl.querySelector('.map-tooltip');
+        if (!tooltip) return;
+        var rect = hoverEl.getBoundingClientRect();
+        var margin = 10;
+        var vw = window.innerWidth;
+        var vh = window.innerHeight;
+
+        // Prefer above; fall back to below; last resort center
+        var top;
+        if (rect.top - MINIMAP_PX - margin >= 0) {
+            top = rect.top - MINIMAP_PX - margin;
+        } else if (rect.bottom + MINIMAP_PX + margin <= vh) {
+            top = rect.bottom + margin;
+        } else {
+            top = Math.max(margin, Math.round((vh - MINIMAP_PX) / 2));
+        }
+
+        var left = rect.left;
+        if (left + MINIMAP_PX > vw - margin) left = vw - MINIMAP_PX - margin;
+        if (left < margin) left = margin;
+
+        tooltip.style.top  = top  + 'px';
+        tooltip.style.left = left + 'px';
+    }
+
+    // Attiva il JS positioning SOLO per gli .map-hover dentro il modal body
+    // (fuori dal modal il tooltip usa position:absolute normale, che funziona già)
+    var _modalBody = document.getElementById('drops-modal-body');
+    if (_modalBody) {
+        _modalBody.addEventListener('mouseover', function (e) {
+            var hover = e.target.closest('.map-hover');
+            if (hover) positionMapTooltip(hover);
+        });
+    }
+    /* -------------------------------------------------------------------- */
+
+    var params = new URLSearchParams(window.location.search);
+    var overlay = document.getElementById('drops-modal-overlay');
+    var closeBtn = document.getElementById('drops-modal-close');
+
+    if (overlay && (params.has('itemid') || params.has('mobid'))) {
+        overlay.classList.add('active');
+        document.body.style.overflow = 'hidden';
+        if (closeBtn) closeBtn.focus();
+    }
+
+    function closeModal() {
+        if (!overlay) return;
+        overlay.classList.remove('active');
+        document.body.style.overflow = '';
+    }
+
+    if (closeBtn) closeBtn.addEventListener('click', closeModal);
+
+    if (overlay) {
+        overlay.addEventListener('click', function (e) {
+            if (e.target === overlay) closeModal();
+        });
+    }
+
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') closeModal();
+    });
+})();
+</script>
 </body>
 </html>
