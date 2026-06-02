@@ -10,7 +10,7 @@ $readEnv = static function ($name, $default = '') {
 
 return [
     'db' => [
-        'server' => '10.10.0.236',
+        'server' => '127.0.0.1',
         'database' => 'PS_UserData',
         'user' => $readEnv('DB_USER', ''),
         'password' => $readEnv('DB_PASSWORD', ''),
