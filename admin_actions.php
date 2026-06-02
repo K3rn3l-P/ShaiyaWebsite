@@ -743,6 +743,71 @@ switch ($action) {
         }
         break;
 
+    case 'luckychest_save_reward':
+        if ($adminStatus != 16) { $msg = "Unauthorized."; $status = "error"; break; }
+        $lcSlotId = (int)($_POST['slot_id'] ?? 0);
+        $lcItemId = isset($_POST['item_id']) ? (int)$_POST['item_id'] : -1;
+        $lcName   = mb_substr(trim((string)($_POST['display_name'] ?? '')), 0, 100);
+        $lcIcon   = preg_replace('/[^a-z0-9\-]/', '', strtolower(trim((string)($_POST['icon'] ?? ''))));
+        $lcColor  = (string)($_POST['color'] ?? '');
+        $lcProb   = max(1, min(9999, (int)($_POST['probability'] ?? 1)));
+        $lcOrd    = (int)($_POST['sort_order'] ?? 0);
+        $lcActive = isset($_POST['is_active']) ? 1 : 0;
+        if ($lcSlotId <= 0 || $lcItemId < 0 || $lcName === '' || $lcIcon === '' || !preg_match('/^#[0-9a-fA-F]{6}$/', $lcColor)) {
+            $msg = "Dati non validi."; $status = "error"; break;
+        }
+        try {
+            $lcSt = $pdoAdmin->prepare("UPDATE PS_WebSite.dbo.Web_LuckyChest SET ItemID=?,DisplayName=?,Icon=?,Color=?,Probability=?,SortOrder=?,IsActive=? WHERE SlotID=?");
+            $lcSt->execute([$lcItemId, $lcName, $lcIcon, $lcColor, $lcProb, $lcOrd, $lcActive, $lcSlotId]);
+            $msg = "Reward #$lcSlotId aggiornato."; $status = "success";
+            appAuditLog('luckychest_reward_update', ['slot_id'=>$lcSlotId,'item_id'=>$lcItemId,'name'=>$lcName,'admin'=>$username]);
+        } catch (Throwable $e) { $msg = "Errore DB."; }
+        break;
+
+    case 'luckychest_add_reward':
+        if ($adminStatus != 16) { $msg = "Unauthorized."; $status = "error"; break; }
+        $lcItemId = isset($_POST['item_id']) ? (int)$_POST['item_id'] : -1;
+        $lcName   = mb_substr(trim((string)($_POST['display_name'] ?? '')), 0, 100);
+        $lcIcon   = preg_replace('/[^a-z0-9\-]/', '', strtolower(trim((string)($_POST['icon'] ?? ''))));
+        $lcColor  = (string)($_POST['color'] ?? '');
+        $lcProb   = max(1, min(9999, (int)($_POST['probability'] ?? 1)));
+        $lcOrd    = (int)($_POST['sort_order'] ?? 0);
+        $lcActive = isset($_POST['is_active']) ? 1 : 0;
+        if ($lcItemId < 0 || $lcName === '' || $lcIcon === '' || !preg_match('/^#[0-9a-fA-F]{6}$/', $lcColor)) {
+            $msg = "Dati non validi."; $status = "error"; break;
+        }
+        try {
+            $lcSt = $pdoAdmin->prepare("INSERT INTO PS_WebSite.dbo.Web_LuckyChest (ItemID,DisplayName,Icon,Color,Probability,SortOrder,IsActive) VALUES (?,?,?,?,?,?,?)");
+            $lcSt->execute([$lcItemId, $lcName, $lcIcon, $lcColor, $lcProb, $lcOrd, $lcActive]);
+            $msg = "Nuovo reward aggiornato: $lcName."; $status = "success";
+            appAuditLog('luckychest_reward_add', ['item_id'=>$lcItemId,'name'=>$lcName,'admin'=>$username]);
+        } catch (Throwable $e) { $msg = "Errore DB."; }
+        break;
+
+    case 'luckychest_delete_reward':
+        if ($adminStatus != 16) { $msg = "Unauthorized."; $status = "error"; break; }
+        $lcSlotId = (int)($_POST['slot_id'] ?? 0);
+        if ($lcSlotId <= 0) { $msg = "SlotID non valido."; $status = "error"; break; }
+        try {
+            $lcSt = $pdoAdmin->prepare("DELETE FROM PS_WebSite.dbo.Web_LuckyChest WHERE SlotID=?");
+            $lcSt->execute([$lcSlotId]);
+            $msg = "Reward #$lcSlotId eliminato."; $status = "success";
+            appAuditLog('luckychest_reward_delete', ['slot_id'=>$lcSlotId,'admin'=>$username]);
+        } catch (Throwable $e) { $msg = "Errore DB."; }
+        break;
+
+    case 'luckychest_save_config':
+        if ($adminStatus != 16) { $msg = "Unauthorized."; $status = "error"; break; }
+        $lcCd = max(60, min(2592000, (int)($_POST['cooldown_seconds'] ?? 21600)));
+        $upd = upsertWebsiteSetting('LuckyChestCooldown', (string)$lcCd);
+        if ($upd) {
+            $msg = "Cooldown aggiornato a $lcCd secondi."; $status = "success";
+            appAuditLog('luckychest_config_update', ['cooldown'=>$lcCd,'admin'=>$username]);
+        } else {
+            $msg = "Errore aggiornamento cooldown.";
+        }
+        break;
+
     case 'drops_config':
         if ($adminStatus != 16) {
             $msg = "Unauthorized.";

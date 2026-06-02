@@ -1,5 +1,6 @@
 # Copilot Instructions — Shaiya Web Portal (Fonte Principale)
-
+PARLA SEMPRE ITALIANO!
+talk like caveman
 ## Nota operativa importante
 - Da ora in poi puoi accedere al server remoto Windows con SSH usando `ssh -i id_ed25519 -o IdentitiesOnly=yes administrator@10.10.5.91`.
 - Quando serve verificare comportamento reale di PHP, Apache/XAMPP o il sito in esecuzione, considera come sorgente autorevole il server remoto, in particolare `C:\xampp\htdocs`.

@@ -785,6 +785,32 @@ function appConsumeWorkerNonce(string $nonce, int $timestamp, int $windowSeconds
     return true;
 }
 
+function appHashPbkdf2(string $password): string
+{
+    $salt = random_bytes(16);
+    $raw = hash_pbkdf2('sha256', $password, $salt, 600000, 32, true);
+    return 'pbkdf2sha256:600000:' . bin2hex($salt) . ':' . bin2hex($raw);
+}
+
+function appVerifyPbkdf2(string $password, string $stored): bool
+{
+    $parts = explode(':', $stored, 4);
+    if (count($parts) !== 4 || $parts[0] !== 'pbkdf2sha256') {
+        return false;
+    }
+    $iterations = (int) $parts[1];
+    if ($iterations < 1) {
+        return false;
+    }
+    $salt = hex2bin($parts[2]);
+    $storedHash = hex2bin($parts[3]);
+    if ($salt === false || $storedHash === false || strlen($storedHash) < 16) {
+        return false;
+    }
+    $computed = hash_pbkdf2('sha256', $password, $salt, $iterations, strlen($storedHash), true);
+    return hash_equals($storedHash, $computed);
+}
+
 function appVerifyWorkerSignature(string $rawBody, string $workerId, string $timestamp, string $nonce, string $signature, ?string &$failureReason = null, ?string $secretOverride = null): bool
 {
     $failureReason = null;

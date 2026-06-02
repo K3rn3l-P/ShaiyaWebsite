@@ -63,17 +63,31 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['login'])) {
 
                 // ✅ PRIMARY: Verify against hashed password (Enpassword)
                 if (!empty($enpasswordHash)) {
-                    $passwordVerified = password_verify($password, $enpasswordHash);
+                    if (substr($enpasswordHash, 0, 13) === 'pbkdf2sha256:') {
+                        $passwordVerified = appVerifyPbkdf2($password, $enpasswordHash);
+                    } else {
+                        // Legacy Argon2id — verify then auto-upgrade to PBKDF2
+                        $passwordVerified = password_verify($password, $enpasswordHash);
+                        if ($passwordVerified) {
+                            $upgraded = appHashPbkdf2($password);
+                            try {
+                                $upgradeStmt = $pdoAdmin->prepare("UPDATE PS_UserData.dbo.Users_Master SET Enpassword = ?, PasswordHashedAt = GETDATE() WHERE UserID = ?");
+                                $upgradeStmt->execute([$upgraded, $username]);
+                                appSecurityLog('Password upgraded to pbkdf2 for user: ' . $username);
+                            } catch (Throwable $e) {
+                                error_log('PBKDF2 upgrade failed for user: ' . $username . ' - ' . $e->getMessage());
+                            }
+                        }
+                    }
                 }
                 // ✅ FALLBACK: Migration pattern - if Enpassword empty, verify against plaintext and hash
                 elseif (!empty($plainPassword) && $password === $plainPassword) {
                     $passwordVerified = true;
-                    // Hash the password on-login and save to Enpassword
-                    $newHash = password_hash($password, PASSWORD_ARGON2ID, ['memory_cost' => 65536, 'time_cost' => 4, 'parallelism' => 1]);
+                    $newHash = appHashPbkdf2($password);
                     try {
                         $migrateStmt = $pdoAdmin->prepare("UPDATE PS_UserData.dbo.Users_Master SET Enpassword = ?, PasswordHashedAt = GETDATE() WHERE UserID = ?");
                         $migrateStmt->execute([$newHash, $username]);
-                        appSecurityLog('Password migrated to hash for user: ' . $username);
+                        appSecurityLog('Password migrated to pbkdf2 for user: ' . $username);
                     } catch (Throwable $e) {
                         error_log('Failed to migrate password hash for user: ' . $username . ' - ' . $e->getMessage());
                         // Continue anyway - password is verified, just not saved for next time

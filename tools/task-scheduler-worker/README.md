@@ -1,99 +1,143 @@
 # Task Scheduler Worker (Windows)
 
-Worker locale Windows per il modulo scheduler del pannello admin. Il task principale del worker è il poller da un minuto; i trigger dei singoli job vengono creati localmente sullo stesso server Windows.
+Worker locale Windows per il modulo scheduler del pannello admin.
 
-## Flusso
+## Architettura
 
 1. Il pannello inserisce azioni in `Web_TaskQueue`
-2. `worker.ps1` legge queue via API firmata HMAC+nonce
-3. Il worker crea/aggiorna task Windows (`ShaiyaWebJob_<JobID>`)
-4. Il poller locale riattiva il worker ogni minuto, mentre i task dei singoli job hanno il loro trigger Windows configurato sul worker
-5. Esito inviato alla web app e loggato su `Web_TaskJobRuns`
+2. `worker.ps1` legge la queue via API firmata HMAC+nonce (ogni minuto)
+3. Il worker crea/aggiorna task Windows (`ShaiyaWebJob_<JobID>`) per i singoli job
+4. Esito inviato alla web app e loggato su `Web_TaskJobRuns`
 
-## Prerequisiti
+## Setup (dopo ogni reinstall server)
 
-- PowerShell 5.1+
-- Permessi amministratore locale (creazione Scheduled Tasks)
-- `WORKER_HMAC_SECRET` configurato in ambiente Apache/PHP uguale a `hmac_secret`
-- `DB_WEBSITE_NAME` allineato al database che contiene `Web_Settings`/scheduler tables (default: `PS_WebSite`)
+**Due comandi, nient'altro.**
 
-## Setup rapido
+### 1. SQL — esegui una volta su SQL Server
 
-1. Copia `worker.config.sample.json` in `worker.config.json`
-2. Aggiorna campi (`api_url`, `worker_id`, `hmac_secret`, `sql_connection_string`)
-	 - `sql_connection_string` deve essere una connessione SQL completa (`key=value;...`), non solo nome DB.
-	 - Se nel JSON trovi `\u0026`, rappresenta il carattere `&` (non è una password corrotta).
-	 - Esempi validi:
-		 - `Server=127.0.0.1;Database=securetech;Integrated Security=True;TrustServerCertificate=True;Encrypt=False;`
-		 - `Server=127.0.0.1;Database=securetech;User ID=sa;Password=YOUR_PASSWORD;TrustServerCertificate=True;Encrypt=False;`
-	 - Esempio non valido: `PS_WebSite`
-	- Se usi `generate-worker-config.ps1` senza `-SqlConnectionString`, lo script usa automaticamente le variabili ambiente già presenti (`DB_HOST`, `DB_USER`, `DB_PASSWORD`, `DB_WEBSITE_NAME`).
-	- Lo script genera anche `worker-config-sync.sql` con upsert automatico di `TaskSchedulerWorkerSecret` e `TaskSchedulerWorkerId` in `Web_Settings`.
-	- Se `WORKER_HMAC_SECRET` è già presente nell'ambiente, `generate-worker-config.ps1` lo riusa automaticamente per evitare mismatch firma.
-	- Se `WORKER_HMAC_SECRET` non è presente, viene generato un nuovo `hmac_secret`: in quel caso aggiorna Apache/PHP e riavvia prima dei test.
-3. Esegui `install-worker.ps1` come amministratore: registra direttamente il task Windows con polling a intervalli di minuti tramite `schtasks.exe`; se in Task Scheduler vedi un `TimeTrigger` con intervallo `PT1M`, il poller e' installato correttamente
-	 - Lo script crea automaticamente la cartella `logs` accanto a `worker.ps1`.
+```sql
+-- In SQL Server Management Studio, apri e lancia:
+-- sql/create_web_tables.sql
+-- Crea tutte le tabelle incluse Web_TaskJobs, Web_TaskQueue, Web_TaskJobRuns
+```
 
-### Sync SQL consigliato (dopo ogni rigenerazione config)
+### 2. PowerShell — esegui come Administrator sul server
 
-1. Esegui `generate-worker-config.ps1`.
-2. Esegui in SQL Server il file generato `worker-config-sync.sql`.
-3. Riavvia Apache/PHP (se necessario) e testa il worker.
+Se `DB_USER` e `DB_PASSWORD` sono già impostati come env var di sistema (Apache già configurato) — host e DB usano i default `127.0.0.1` / `PS_WebSite`:
 
-## Modalità UX (Task Scheduler)
+```powershell
+.\setup-worker-complete.ps1
+```
 
-- `Global Module Status`: aggiorna il flag `TaskSchedulerEnabled` su `Web_Settings` del database sito configurato (`DB_WEBSITE_NAME`) e abilita/disabilita solo creazione/queueing dal pannello.
-- `Run Now`: invia la richiesta in queue immediatamente; al ciclo successivo il worker esegue direttamente il job (senza attendere il trigger orario del task `ShaiyaWebJob_<JobID>`).
-- `Quick Command Job`: form semplificata (`Job Name`, `Windows Schedule`, `Service`, `Service Command`, `Second Command` opzionale) con selettori `Database/Table/Column` validati su metadata reali.
-- `Advanced Job`: form completa con `SERVICE_COMMAND` e `SQL_SCRIPT` (inline o upload `.sql`).
-- Le schedule quick usano intervalli Windows-friendly (`every_10m`, `every_15m`, `every_30m`, `hourly`, `daily_00_00`, `daily_03_00`, `daily_06_00`, `daily_12_00`, `daily_18_00`).
-- La lista `Database` in UX è dinamica: mostra i database online realmente accessibili dall'utente SQL del sito (non più una lista fissa a 3 voci).
-- Esempi `Comparison` (quick mode):
-	- `PS_GameDefs` + `EXPTable` + `EXP` + `>=` + `100`
-	- `PS_GameDefs` + `EXPTable` + `NameDay` + `contains` + `Monday`
-- Esempio operativo verificato:
-	- I job `SERVICE_COMMAND` usano `PS_GameDefs.dbo.Command`.
-	- Quick mode con `Service Command = /exp2xenable` e selettori DB su `PS_GameDefs.EXPTable.EXP` risolve automaticamente il valore del giorno corrente (preferenza `NameDay = DATENAME(dw, GETDATE())`).
-	- `Second Command` opzionale viene eseguito subito dopo il comando principale (es. `/nt ...`).
-	- Placeholder supportati nel secondo comando: `{exp}`, `{value}`, `{day}`.
-	- Esempio: `/nt Player, today is {day}. EXP: x{exp}. Enjoy the game!`
-	- Job Advanced opzionale: `SQL_SCRIPT` per logiche dinamiche totalmente custom.
+Altrimenti passa la connection string esplicitamente:
 
-## Verifica attesa
+```powershell
+.\setup-worker-complete.ps1 -SqlConnectionString "Server=127.0.0.1;Database=PS_WebSite;User ID=Ernoweb@;Password=YOURPASS;TrustServerCertificate=True;Encrypt=False;"
+```
 
-- Il task `ShaiyaSchedulerWorker` deve avere un trigger locale Windows con ripetizione ogni 1 minuto.
-- Questo task non e' il job finale: serve a sincronizzare i job creati dal pannello.
-- Dopo che salvi un job nel sito, il worker crea o aggiorna il task locale `ShaiyaWebJob_<JobID>` con il vero trigger operativo del job.
+Lo script fa tutto in automatico:
+
+- Testa connessione SQL
+- Riusa il secret esistente (da env var o config) oppure ne genera uno nuovo
+- Scrive `worker.config.json`
+- Sincronizza il secret su `Web_Settings` nel DB
+- Imposta `WORKER_HMAC_SECRET` come variabile d'ambiente di sistema Windows
+- Riavvia Apache (per caricare la nuova variabile — niente più warning `WORKER_HMAC_SECRET is missing`)
+- Registra il task `ShaiyaSchedulerWorker` nel Windows Task Scheduler (ogni 1 min, SYSTEM)
+- Lancia un test heartbeat
+
+Output atteso:
+
+```
+[OK]  worker.ps1 found
+[OK]  SQL connection OK
+[OK]  Reusing existing WORKER_HMAC_SECRET from system env: d433ed05...
+[OK]  Written: ...\worker.config.json
+[OK]  DB Web_Settings updated
+[OK]  WORKER_HMAC_SECRET set at Machine level
+[OK]  Apache service 'Apache2.4' restarted
+[OK]  Task 'ShaiyaSchedulerWorker' registered (every 1 min, SYSTEM)
+[OK]  Task triggered.
+```
+
+## File nella cartella
+
+| File | Scopo |
+|---|---|
+| `setup-worker-complete.ps1` | **Setup all-in-one — usa questo** |
+| `worker.ps1` | Worker principale (lanciato dal task scheduler) |
+| `worker.config.json` | Config runtime (generata dallo script) |
+| `worker.config.sample.json` | Template di riferimento |
+| `generate-worker-config.ps1` | Legacy — rigenera solo il config |
+| `install-worker.ps1` | Legacy — registra solo il task scheduler |
+| `worker-config-sync.sql` | SQL generato da generate-worker-config.ps1 |
+| `logs/worker-error.log` | Log errori worker (creato automaticamente) |
+
+## Modalità UX (pannello admin)
+
+- **Global Module Status** — abilita/disabilita la creazione di job (`TaskSchedulerEnabled` in `Web_Settings`)
+- **Run Now** — invia `RUN_NOW` in queue; il worker esegue al ciclo successivo
+- **Quick Command Job** — form semplificata: Job Name, Schedule, Service, Command, Second Command opzionale
+- **Advanced Job** — form completa con `SERVICE_COMMAND` e `SQL_SCRIPT` (inline o upload `.sql`)
+
+### Schedule disponibili
+
+| Valore | Intervallo |
+|---|---|
+| `every_10m` | ogni 10 minuti |
+| `every_15m` | ogni 15 minuti |
+| `every_30m` | ogni 30 minuti |
+| `hourly` | ogni ora |
+| `daily_00_00` | ogni giorno alle 00:00 |
+| `daily_03_00` | ogni giorno alle 03:00 |
+| `daily_06_00` | ogni giorno alle 06:00 |
+| `daily_12_00` | ogni giorno alle 12:00 |
+| `daily_18_00` | ogni giorno alle 18:00 |
+
+### Simple Meta (risoluzione dinamica valore)
+
+Quick mode con `SERVICE_COMMAND = /exp2xenable` e selettori DB risolve il valore dal DB al momento dell'esecuzione:
+- Se la tabella ha colonna `NameDay`, usa il valore del giorno corrente (priorità)
+- Altrimenti usa la colonna con filtro/operatore configurato
+
+Operatori supportati: `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `contains`
+
+Placeholder in Second Command: `{exp}`, `{value}`, `{day}`
+
+Esempio: `/nt Giocatore, oggi è {day}. EXP: x{exp}. Buon gioco!`
 
 ## Verifica operativa rapida (post-install)
 
-1. In UX imposta `Global Module Status` su ON.
-2. Crea un job `SERVICE_COMMAND` e usa `Run Now`.
-3. Entro il ciclo di polling successivo verifica:
-	- `Web_TaskQueue`: item `RUN_NOW` passa da `pending/processing` a `done` (o `failed` con messaggio).
-	- `Web_TaskJobRuns`: nuova riga per il `JobID` con esito run.
-	- log server game/service: presenza del comando inviato.
+1. Admin panel → Task Scheduler → Global Module Status = ON
+2. Crea job `SERVICE_COMMAND` → Run Now
+3. Entro il minuto successivo verifica:
+   - `Web_TaskQueue`: item `RUN_NOW` → `done`
+   - `Web_TaskJobRuns`: nuova riga con esito
+   - Log game service: comando ricevuto
 
-## Verifica diretta job (senza queue)
+### Test esecuzione diretta (senza queue)
 
-Per verificare subito l'esecuzione del comando lato worker, puoi lanciare manualmente il job:
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File "C:\xampp\htdocs\tools\task-scheduler-worker\worker.ps1" `
+  -ConfigPath "C:\xampp\htdocs\tools\task-scheduler-worker\worker.config.json" `
+  -RunJobId 1 -Once
+```
 
-`powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\task-scheduler-worker\worker.ps1 -ConfigPath C:\task-scheduler-worker\worker.config.json -RunJobId 1 -Once`
+Se non esegue, controlla `logs\worker-error.log`.
 
-- Se questo comando esegue il service command nel log game, il blocco non è nel comando ma nel flusso queue/poller.
-- Se non esegue, controlla `C:\task-scheduler-worker\logs\worker-error.log`.
+## Sicurezza
 
-## Nota secret HMAC
+- API `task_scheduler_worker_api.php` — solo localhost + firma HMAC-SHA256 + nonce anti-replay
+- `TaskSchedulerCommandWhitelist` in `Web_Settings` — whitelist comandi SERVICE_COMMAND
+- `TaskSchedulerAllowedAdminUIDs` — RBAC admin per scheduler
+- `WORKER_HMAC_SECRET` come env var di sistema elimina il fallback DB e il warning in `security.log`
 
-Ogni volta che rigeneri `worker.config.json` cambia `hmac_secret`.
+## Troubleshooting
 
-- Aggiorna `WORKER_HMAC_SECRET` in Apache/PHP.
-- Riavvia Apache/PHP prima di testare `Run Now`.
-- Se ricevi ancora `Invalid signature`, controlla `config/logs/security.log`: il backend ora registra il motivo tecnico (`missing_secret`, `invalid_worker_id`, `invalid_timestamp`, `invalid_nonce_format`, `invalid_signature_format`, `nonce_rejected`, `signature_mismatch`).
-- Fallback operativo: se `WORKER_HMAC_SECRET` non è disponibile in PHP, l'API usa `Web_Settings.TaskSchedulerWorkerSecret` (consigliato valorizzarlo con lo stesso secret del worker).
-
-## Note sicurezza
-
-- API `task_scheduler_worker_api.php` accetta solo localhost + firma HMAC + nonce anti-replay.
-- La whitelist comandi lato web è gestita da `TaskSchedulerCommandWhitelist`.
-- RBAC scheduler lato web è limitato ad admin allowlist (`TaskSchedulerAllowedAdminUIDs`).
+| Sintomo | Causa | Fix |
+|---|---|---|
+| `WORKER_HMAC_SECRET is missing` in security.log | Env var non impostata | Esegui `setup-worker-complete.ps1` |
+| `signature_mismatch` in security.log | Secret DB ≠ config.json | Esegui `setup-worker-complete.ps1` — risincronizza entrambi |
+| Queue items rimangono `pending` | Task scheduler fermo | `schtasks /Run /TN ShaiyaSchedulerWorker` |
+| `worker-error.log` con errore SQL | Connection string errata | Verifica `worker.config.json` → `sql_connection_string` |

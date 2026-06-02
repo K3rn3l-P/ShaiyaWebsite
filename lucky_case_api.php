@@ -81,6 +81,37 @@ if (!appRateLimitAllow($rateKey, 10, 60)) {
     exit;
 }
 
+// Load cooldown and rewards from DB (fallback to hardcoded defaults)
+$lcConf = fetchWebsiteSettings(['LuckyChestCooldown']);
+$cooldownSeconds = max(60, (int)($lcConf['LuckyChestCooldown'] ?? 21600));
+
+$rewards = [];
+try {
+    $rwStmt = $pdoAdmin->query(
+        "SELECT ItemID, DisplayName AS name, Icon AS icon, Color AS color, Probability AS probability
+         FROM PS_WebSite.dbo.Web_LuckyChest WHERE IsActive = 1 ORDER BY SortOrder ASC"
+    );
+    foreach ($rwStmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $rewards[] = [
+            'id'          => (int)$r['ItemID'],
+            'name'        => (string)$r['name'],
+            'icon'        => (string)$r['icon'],
+            'color'       => (string)$r['color'],
+            'probability' => max(1, (int)$r['probability']),
+        ];
+    }
+} catch (Throwable $e) {}
+
+if (empty($rewards)) {
+    $rewards = [
+        ['id' => 100251, 'name' => '10 AP',      'icon' => 'gem',          'color' => '#bdc3c7', 'probability' => 20],
+        ['id' => 100252, 'name' => '100 AP',     'icon' => 'gem',          'color' => '#3498db', 'probability' => 15],
+        ['id' => 100253, 'name' => '1000 AP',    'icon' => 'gem',          'color' => '#9b59b6', 'probability' => 10],
+        ['id' => 100254, 'name' => '10.000 AP',  'icon' => 'gem',          'color' => '#ff3f34', 'probability' =>  5],
+        ['id' => 0,      'name' => 'Nothing',    'icon' => 'times-circle', 'color' => '#7f8c8d', 'probability' =>  2],
+    ];
+}
+
 // Check Cooldown - use $pdoConn for PS_WebSite query
 $timeQuery = "SELECT LastRollTime, DATEDIFF(second, LastRollTime, GETDATE()) AS SecondsPassed FROM PS_WebSite.dbo.Web_LuckyCase WHERE UserUID = ?";
 $timeStmt = $pdoConn->prepare($timeQuery);
@@ -89,8 +120,6 @@ $timeRow = $timeStmt->fetch();
 
 if ($timeRow) {
     $secondsPassed = (int) $timeRow['SecondsPassed'];
-    $cooldownSeconds = 6 * 3600; // 6 hours
-
     if ($secondsPassed < $cooldownSeconds) {
         $timeLeft = $cooldownSeconds - $secondsPassed;
         $hours = floor($timeLeft / 3600);
@@ -99,15 +128,6 @@ if ($timeRow) {
         exit;
     }
 }
-
-// Roll Rewards
-$rewards = [
-    ['id' => 100251, 'name' => '10 AP', 'icon' => 'gem', 'color' => '#bdc3c7', 'probability' => 20],        // Common
-    ['id' => 100252, 'name' => '100 AP', 'icon' => 'gem', 'color' => '#3498db', 'probability' => 15],       // Rare
-    ['id' => 100253, 'name' => '1000 AP', 'icon' => 'gem', 'color' => '#9b59b6', 'probability' => 10],       // Epic
-    ['id' => 100254, 'name' => '10.000 AP', 'icon' => 'gem', 'color' => '#ff3f34', 'probability' => 5],     // Legendary
-    ['id' => 0, 'name' => 'Nothing', 'icon' => 'times-circle', 'color' => '#7f8c8d', 'probability' => 2]    // Junk
-];
 
 // Determine Winning Item based on weighted probability
 $totalProb = array_sum(array_column($rewards, 'probability'));

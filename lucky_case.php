@@ -11,8 +11,28 @@ if (!isset($_SESSION['user'])) {
 
 $active_page = 'account';
 
-// Fetch Lucky Chest Setting
-$luckyChestEnabled = fetchWebsiteSettings(['LuckyChestEnabled'])['LuckyChestEnabled'] ?? '1';
+// Fetch settings + rewards from DB
+$lcFetchSettings = fetchWebsiteSettings(['LuckyChestEnabled', 'LuckyChestCooldown']);
+$luckyChestEnabled = $lcFetchSettings['LuckyChestEnabled'] ?? '1';
+
+$lcRewardsJs = [];
+try {
+    $lcRwStmt = $pdoAdmin->query(
+        "SELECT ItemID, DisplayName, Icon, Color FROM PS_WebSite.dbo.Web_LuckyChest WHERE IsActive=1 ORDER BY SortOrder ASC"
+    );
+    foreach ($lcRwStmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $lcRewardsJs[] = ['id' => (int)$r['ItemID'], 'name' => $r['DisplayName'], 'icon' => $r['Icon'], 'color' => $r['Color']];
+    }
+} catch (Throwable $e) {}
+if (empty($lcRewardsJs)) {
+    $lcRewardsJs = [
+        ['id' => 100251, 'name' => '10 AP',     'icon' => 'gem',          'color' => '#bdc3c7'],
+        ['id' => 100252, 'name' => '100 AP',    'icon' => 'gem',          'color' => '#3498db'],
+        ['id' => 100253, 'name' => '1000 AP',   'icon' => 'gem',          'color' => '#9b59b6'],
+        ['id' => 100254, 'name' => '10.000 AP', 'icon' => 'gem',          'color' => '#ff3f34'],
+        ['id' => 0,      'name' => 'Nothing',   'icon' => 'times-circle', 'color' => '#7f8c8d'],
+    ];
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -236,14 +256,8 @@ $luckyChestEnabled = fetchWebsiteSettings(['LuckyChestEnabled'])['LuckyChestEnab
     <?php include 'modules/footer.php'; ?>
 
     <script>
-        // Item definitions (should roughly match backend probabilities to look authentic)
-        const REWARDS = [
-            { id: 100251, name: '10 AP', icon: 'gem', color: '#bdc3c7' },       // Common (Silver)
-            { id: 100252, name: '100 AP', icon: 'gem', color: '#3498db' },      // Rare (Blue)
-            { id: 100253, name: '1000 AP', icon: 'gem', color: '#9b59b6' },      // Epic (Purple)
-            { id: 100254, name: '10.000 AP', icon: 'gem', color: '#ff3f34' },    // Legendary (Red/Orange)
-            { id: 0, name: 'Nothing', icon: 'times-circle', color: '#7f8c8d' }   // Junk (Grey)
-        ];
+        // Item definitions loaded from DB via PHP (matches backend rewards exactly)
+        const REWARDS = <?php echo json_encode($lcRewardsJs, JSON_UNESCAPED_UNICODE); ?>;
 
         const ITEM_WIDTH = 110; // 100px width + 10px margin
 

@@ -122,12 +122,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && $regEnabled == '1') {
                 } else {
                     // Insert new user with hashed password (Enpassword) + plaintext (Pw for legacy game engine)
                     $user_ip = substr($_SERVER['REMOTE_ADDR'], 0, 15); // Max length for UserIp is 15
-                    // ✅ Hash password using Argon2ID (OWASP recommended)
-                    $passwordHash = password_hash($password, PASSWORD_ARGON2ID, [
-                        'memory_cost' => 65536,  // 64MB
-                        'time_cost' => 4,         // 4 iterations
-                        'parallelism' => 1        // 1 thread
-                    ]);
+                    $passwordHash = appHashPbkdf2($password);
                     try {
                         $insert_stmt = $pdoAdmin->prepare("INSERT INTO PS_UserData.dbo.Users_Master (UserID, Pw, Enpassword, Email, JoinDate, Admin, AdminLevel, UseQueue, Status, [Leave], LeaveDate, UserType, UserIp, Point, PasswordHashedAt) VALUES (?, ?, ?, ?, GETDATE(), 0, 0, 0, 0, 0, NULL, 'N', ?, 0, GETDATE())");
                         $insert_stmt->execute([$username, $password, $passwordHash, $email, $user_ip]);
@@ -135,7 +130,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && $regEnabled == '1') {
                         $_SESSION['user'] = $username;
                         appRotateCsrfToken();
                         appRateLimitReset($registerRateKey);
-                        appSecurityLog('New account created with hashed password: ' . $username);
+                        appSecurityLog('New account created (pbkdf2): ' . $username);
                         header("Location: /account");
                         exit;
                     } catch (Throwable $e) {

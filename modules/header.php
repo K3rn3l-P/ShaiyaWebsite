@@ -82,6 +82,10 @@
     </style>
     <div class="action-buttons">
         <a href="/download" class="header-btn btn-download"><i class="fas fa-download"></i> Game Download</a>
+        <?php if (!empty($_SESSION['user'])): ?>
+        <a href="/account" class="header-btn btn-register"><i class="fas fa-user"></i> My Account</a>
+        <?php else: ?>
         <a href="/register" class="header-btn btn-register"><i class="fas fa-user-plus"></i> Free Registration</a>
+        <?php endif; ?>
     </div>
 </header>

@@ -199,3 +199,115 @@ END
 ELSE
     PRINT 'Table already exists: Web_DropsEditLog';
 GO
+
+-- ============================================================
+-- 8. Web_TaskJobs
+--    Job definitions for the Task Scheduler module.
+--    Managed via admin panel (Task Scheduler section).
+-- ============================================================
+IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[Web_TaskJobs]') AND type = N'U')
+BEGIN
+    CREATE TABLE dbo.Web_TaskJobs (
+        JobID         INT           IDENTITY(1,1) PRIMARY KEY,
+        JobName       NVARCHAR(200) NOT NULL,
+        IsEnabled     BIT           NOT NULL DEFAULT 1,
+        Status        VARCHAR(20)   NOT NULL DEFAULT 'active',
+        ScheduleMode  VARCHAR(20)   NOT NULL DEFAULT 'simple',
+        ScheduleValue VARCHAR(50)   NOT NULL DEFAULT 'hourly',
+        TaskType      VARCHAR(20)   NOT NULL DEFAULT 'SERVICE_COMMAND',
+        ServiceName   NVARCHAR(200) NULL,
+        CommandText   NVARCHAR(500) NULL,
+        SqlPayload    NVARCHAR(MAX) NULL,
+        SqlSource     VARCHAR(50)   NULL DEFAULT 'none',
+        CreatedBy     NVARCHAR(100) NOT NULL,
+        CreatedAt     DATETIME      NOT NULL DEFAULT GETDATE(),
+        UpdatedBy     NVARCHAR(100) NULL,
+        UpdatedAt     DATETIME      NULL
+    );
+    PRINT 'Created table: Web_TaskJobs';
+END
+ELSE
+    PRINT 'Table already exists: Web_TaskJobs';
+GO
+
+-- ============================================================
+-- 9. Web_TaskQueue
+--    Pending actions sent from admin panel to the worker.
+--    Worker polls this table every minute and processes items.
+-- ============================================================
+IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[Web_TaskQueue]') AND type = N'U')
+BEGIN
+    CREATE TABLE dbo.Web_TaskQueue (
+        QueueID       INT           IDENTITY(1,1) PRIMARY KEY,
+        JobID         INT           NOT NULL,
+        QueueAction   VARCHAR(20)   NOT NULL,
+        Payload       NVARCHAR(MAX) NULL,
+        Status        VARCHAR(20)   NOT NULL DEFAULT 'pending',
+        Attempts      INT           NOT NULL DEFAULT 0,
+        LockedAt      DATETIME      NULL,
+        LockedBy      VARCHAR(100)  NULL,
+        ProcessedAt   DATETIME      NULL,
+        ResultMessage NVARCHAR(MAX) NULL,
+        CreatedAt     DATETIME      NOT NULL DEFAULT GETDATE(),
+        CreatedBy     NVARCHAR(100) NULL
+    );
+    CREATE INDEX IX_Web_TaskQueue_Status ON dbo.Web_TaskQueue(Status, QueueID ASC);
+    PRINT 'Created table: Web_TaskQueue';
+END
+ELSE
+    PRINT 'Table already exists: Web_TaskQueue';
+GO
+
+-- ============================================================
+-- 10. Web_TaskJobRuns
+--    Execution history: one row per job run, logged by worker.
+-- ============================================================
+IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[Web_TaskJobRuns]') AND type = N'U')
+BEGIN
+    CREATE TABLE dbo.Web_TaskJobRuns (
+        RunID        INT           IDENTITY(1,1) PRIMARY KEY,
+        JobID        INT           NOT NULL,
+        QueueID      INT           NULL,
+        RunStatus    VARCHAR(20)   NOT NULL,
+        StartedAt    DATETIME      NOT NULL DEFAULT GETDATE(),
+        FinishedAt   DATETIME      NULL,
+        Output       NVARCHAR(MAX) NULL,
+        ErrorMessage NVARCHAR(MAX) NULL,
+        TriggeredBy  VARCHAR(100)  NULL
+    );
+    CREATE INDEX IX_Web_TaskJobRuns_JobID ON dbo.Web_TaskJobRuns(JobID, StartedAt DESC);
+    PRINT 'Created table: Web_TaskJobRuns';
+END
+ELSE
+    PRINT 'Table already exists: Web_TaskJobRuns';
+GO
+
+-- ============================================================
+-- 11. Web_LuckyChest
+--    Configura i premi del Lucky Chest (ItemID, icona, colore,
+--    peso probabilita'). Gestibile dall'admin panel.
+--    Sostituisce i valori hardcoded in lucky_case_api.php.
+-- ============================================================
+IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[Web_LuckyChest]') AND type = N'U')
+BEGIN
+    CREATE TABLE dbo.Web_LuckyChest (
+        SlotID      INT           IDENTITY(1,1) PRIMARY KEY,
+        ItemID      INT           NOT NULL DEFAULT 0,
+        DisplayName NVARCHAR(100) NOT NULL,
+        Icon        VARCHAR(50)   NOT NULL DEFAULT 'gem',
+        Color       VARCHAR(20)   NOT NULL DEFAULT '#bdc3c7',
+        Probability INT           NOT NULL DEFAULT 1,
+        SortOrder   INT           NOT NULL DEFAULT 0,
+        IsActive    BIT           NOT NULL DEFAULT 1
+    );
+    INSERT INTO dbo.Web_LuckyChest (ItemID, DisplayName, Icon, Color, Probability, SortOrder) VALUES
+        (100251, '10 AP',      'gem',          '#bdc3c7', 20, 0),
+        (100252, '100 AP',     'gem',          '#3498db', 15, 1),
+        (100253, '1000 AP',    'gem',          '#9b59b6', 10, 2),
+        (100254, '10.000 AP',  'gem',          '#ff3f34',  5, 3),
+        (0,      'Nothing',    'times-circle', '#7f8c8d',  2, 4);
+    PRINT 'Created table: Web_LuckyChest (with seed data)';
+END
+ELSE
+    PRINT 'Table already exists: Web_LuckyChest';
+GO

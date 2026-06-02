@@ -53,7 +53,12 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
 
             // ✅ PRIMARY: Verify against hashed password
             if (!empty($enpasswordHash)) {
-                $currentPasswordValid = password_verify($current_password, $enpasswordHash);
+                if (substr($enpasswordHash, 0, 13) === 'pbkdf2sha256:') {
+                    $currentPasswordValid = appVerifyPbkdf2($current_password, $enpasswordHash);
+                } else {
+                    // Legacy Argon2id
+                    $currentPasswordValid = password_verify($current_password, $enpasswordHash);
+                }
             }
             // ✅ FALLBACK: Verify against plaintext (migration pattern)
             elseif (!empty($plainPassword) && $current_password === $plainPassword) {
@@ -61,12 +66,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             }
 
             if ($currentPasswordValid) {
-                // ✅ Hash the new password
-                $newPasswordHash = password_hash($new_password, PASSWORD_ARGON2ID, [
-                    'memory_cost' => 65536,
-                    'time_cost' => 4,
-                    'parallelism' => 1
-                ]);
+                $newPasswordHash = appHashPbkdf2($new_password);
 
                 // Update password (both Pw for legacy compatibility and Enpassword for new verification)
                 $update_query = "UPDATE PS_UserData.dbo.Users_Master SET Pw = ?, Enpassword = ?, PasswordHashedAt = GETDATE() WHERE UserID = ?";
