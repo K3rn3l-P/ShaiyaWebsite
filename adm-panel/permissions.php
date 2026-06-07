@@ -22,7 +22,8 @@
                         'ADMIN_WHITELIST' => 'Admin/IP Whitelist Management',
                         'TASK_SCHEDULER' => 'Task Scheduler Management',
                         'BOSSES_EDITOR' => 'Bosses Management - World Boss configurazione',
-                        'ACTIONLOG' => 'Action Logs Viewer'
+                        'ACTIONLOG' => 'Action Logs Viewer',
+                        'PATCH_MANAGER' => 'Patch Manager - Gestione patch updater client'
                     ];
                     ?>
                     <div class="char-edit-section" style="max-width: 1000px; margin: 40px auto; padding: 30px; background: rgba(15,15,15,0.6); border: 1px solid rgba(255,255,255,0.05); border-radius: 8px;">

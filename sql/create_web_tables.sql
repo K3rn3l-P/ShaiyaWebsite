@@ -311,3 +311,35 @@ END
 ELSE
     PRINT 'Table already exists: Web_LuckyChest';
 GO
+
+-- ============================================================
+-- 12. Web_PatchHistory
+--    Log di ogni patch caricata dal Patch Manager.
+--    Registra versione, descrizione, modo upload, dimensione
+--    e amministratore che ha eseguito l'upload.
+--    Non viene mai cancellata automaticamente (audit permanente).
+-- ============================================================
+USE [PS_WebSite];
+GO
+IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[Web_PatchHistory]') AND type = N'U')
+BEGIN
+    CREATE TABLE dbo.Web_PatchHistory (
+        PatchID             INT           IDENTITY(1,1) PRIMARY KEY,
+        PatchFile           NVARCHAR(200) NOT NULL,
+        PatchVersion        INT           NOT NULL,
+        Description         NVARCHAR(200) NOT NULL,
+        UploadMode          VARCHAR(10)   NOT NULL,   -- 'sah' | 'direct'
+        FileSizeBytes       BIGINT        NOT NULL DEFAULT 0,
+        HasDeleteLst        BIT           NOT NULL DEFAULT 0,
+        ClientVersionBefore INT           NOT NULL DEFAULT 0,
+        ClientVersionAfter  INT           NOT NULL DEFAULT 0,
+        UploadedBy          NVARCHAR(100) NOT NULL,
+        UploadedAt          DATETIME      NOT NULL DEFAULT GETDATE()
+    );
+    CREATE INDEX IX_Web_PatchHistory_Version
+        ON dbo.Web_PatchHistory(PatchVersion DESC);
+    PRINT 'Created table: Web_PatchHistory';
+END
+ELSE
+    PRINT 'Table already exists: Web_PatchHistory';
+GO

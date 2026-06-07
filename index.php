@@ -46,9 +46,8 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['login'])) {
         } elseif (!appRateLimitAllow($loginRateKey, 7, 900)) {
             $login_error = "Too many login attempts. Please wait a few minutes.";
         } else {
-            // ✅ SECURE LOGIN: Use Enpassword (bcrypt/argon2) with on-login migration from Pw
             try {
-                $loginStmt = $pdoAdmin->prepare("SELECT UserID, UserUID, AdminLevel, Point, Pw, Enpassword FROM PS_UserData.dbo.Users_Master WHERE UserID = ?");
+                $loginStmt = $pdoAdmin->prepare("SELECT UserID, UserUID, AdminLevel, Point, Enpassword FROM PS_UserData.dbo.Users_Master WHERE UserID = ?");
                 $loginStmt->execute([$username]);
                 $loginRow = $loginStmt->fetch(PDO::FETCH_ASSOC);
             } catch (Throwable $e) {
@@ -59,9 +58,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['login'])) {
 
             if ($loginRow) {
                 $enpasswordHash = (string) ($loginRow['Enpassword'] ?? '');
-                $plainPassword = (string) ($loginRow['Pw'] ?? '');
 
-                // ✅ PRIMARY: Verify against hashed password (Enpassword)
                 if (!empty($enpasswordHash)) {
                     if (substr($enpasswordHash, 0, 13) === 'pbkdf2sha256:') {
                         $passwordVerified = appVerifyPbkdf2($password, $enpasswordHash);
@@ -78,19 +75,6 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['login'])) {
                                 error_log('PBKDF2 upgrade failed for user: ' . $username . ' - ' . $e->getMessage());
                             }
                         }
-                    }
-                }
-                // ✅ FALLBACK: Migration pattern - if Enpassword empty, verify against plaintext and hash
-                elseif (!empty($plainPassword) && $password === $plainPassword) {
-                    $passwordVerified = true;
-                    $newHash = appHashPbkdf2($password);
-                    try {
-                        $migrateStmt = $pdoAdmin->prepare("UPDATE PS_UserData.dbo.Users_Master SET Enpassword = ?, PasswordHashedAt = GETDATE() WHERE UserID = ?");
-                        $migrateStmt->execute([$newHash, $username]);
-                        appSecurityLog('Password migrated to pbkdf2 for user: ' . $username);
-                    } catch (Throwable $e) {
-                        error_log('Failed to migrate password hash for user: ' . $username . ' - ' . $e->getMessage());
-                        // Continue anyway - password is verified, just not saved for next time
                     }
                 }
             }

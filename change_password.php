@@ -36,8 +36,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     } elseif (strlen($new_password) < 4) {
         $message = '<div style="color: #ff4d4d; text-align: center; margin-bottom: 15px; font-weight: bold;">New password must be at least 4 characters long.</div>';
     } else {
-        // ✅ SECURE: Verify current password against Enpassword (hashed) or Pw (plaintext for migration)
-        $verify_query = "SELECT UserID, Enpassword, Pw FROM PS_UserData.dbo.Users_Master WHERE UserID = ?";
+        $verify_query = "SELECT UserID, Enpassword FROM PS_UserData.dbo.Users_Master WHERE UserID = ?";
         try {
             $verify_stmt = $pdoAdmin->prepare($verify_query);
             $verify_stmt->execute([$username]);
@@ -48,31 +47,23 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
 
         if (isset($verify_stmt) && $user_row = $verify_stmt->fetch(PDO::FETCH_ASSOC)) {
             $enpasswordHash = (string) ($user_row['Enpassword'] ?? '');
-            $plainPassword = (string) ($user_row['Pw'] ?? '');
             $currentPasswordValid = false;
 
-            // ✅ PRIMARY: Verify against hashed password
             if (!empty($enpasswordHash)) {
                 if (substr($enpasswordHash, 0, 13) === 'pbkdf2sha256:') {
                     $currentPasswordValid = appVerifyPbkdf2($current_password, $enpasswordHash);
                 } else {
-                    // Legacy Argon2id
                     $currentPasswordValid = password_verify($current_password, $enpasswordHash);
                 }
-            }
-            // ✅ FALLBACK: Verify against plaintext (migration pattern)
-            elseif (!empty($plainPassword) && $current_password === $plainPassword) {
-                $currentPasswordValid = true;
             }
 
             if ($currentPasswordValid) {
                 $newPasswordHash = appHashPbkdf2($new_password);
 
-                // Update password (both Pw for legacy compatibility and Enpassword for new verification)
-                $update_query = "UPDATE PS_UserData.dbo.Users_Master SET Pw = ?, Enpassword = ?, PasswordHashedAt = GETDATE() WHERE UserID = ?";
+                $update_query = "UPDATE PS_UserData.dbo.Users_Master SET Enpassword = ?, PasswordHashedAt = GETDATE() WHERE UserID = ?";
                 try {
                     $update_stmt = $pdoAdmin->prepare($update_query);
-                    $update_stmt->execute([$new_password, $newPasswordHash, $username]);
+                    $update_stmt->execute([$newPasswordHash, $username]);
                     appRateLimitReset('change_password:' . appGetClientIp() . ':' . strtolower($username));
                     appRotateCsrfToken();
                     appSecurityLog('Password changed for user: ' . $username);

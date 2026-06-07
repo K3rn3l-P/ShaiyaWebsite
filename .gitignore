@@ -52,6 +52,14 @@ config/zap-home/security-zap-audit-legacy/**
 uploads/news/*
 !uploads/news/.gitkeep
 
+# ───Updater (tracciare solo file di configurazione e hash, escludere tutto il resto) ───
+Updater/Files
+!Updater/Files/.gitkeep
+!Updater/Files/.hashes
+Updater/Patches
+!Updater/Patches/.gitkeep
+!Updater/Patches/.hashes
+
 # ─── Build artifacts (non tracciare) ───
 htdocs/*
 htdocs.zip

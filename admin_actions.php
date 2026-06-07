@@ -120,6 +120,93 @@ if (!appRateLimitAllow('admin_action:' . $adminUID . ':' . appGetClientIp(), 120
     exit;
 }
 
+class PatchSahBuilder
+{
+    private $safData = '';
+
+    public static function buildFromFiles(array $files): array
+    {
+        $builder = new self();
+        return $builder->build($files);
+    }
+
+    private function build(array $files): array
+    {
+        usort($files, function ($a, $b) { return strcasecmp($a['path'], $b['path']); });
+
+        $root = ['files' => [], 'subdirs' => []];
+        foreach ($files as $f) {
+            $path  = str_replace('\\', '/', ltrim((string)$f['path'], '/'));
+            $parts = array_values(array_filter(explode('/', $path), function ($p) { return $p !== '' && $p !== '.'; }));
+            if (empty($parts)) continue;
+            $this->insertIntoNode($root, $parts, (string)$f['data']);
+        }
+
+        $totalFiles = $this->countFiles($root);
+
+        // SAH header: "SAH" + uint32(0) + uint32(totalFiles) + 40 bytes padding = 51 bytes
+        $sah  = 'SAH';
+        $sah .= pack('V', 0);
+        $sah .= pack('V', $totalFiles);
+        $sah .= str_repeat("\x00", 40);
+        // Root folder name: length=1, one null byte
+        $sah .= pack('V', 1) . "\x00";
+        $sah .= $this->serializeContent($root);
+        $sah .= str_repeat("\x00", 8);
+
+        return ['sah' => $sah, 'saf' => $this->safData];
+    }
+
+    private function insertIntoNode(array &$node, array $parts, string $data): void
+    {
+        if (count($parts) === 1) {
+            $node['files'][] = ['name' => $parts[0], 'data' => $data];
+        } else {
+            $dir = array_shift($parts);
+            if (!isset($node['subdirs'][$dir])) {
+                $node['subdirs'][$dir] = ['files' => [], 'subdirs' => []];
+            }
+            $this->insertIntoNode($node['subdirs'][$dir], $parts, $data);
+        }
+    }
+
+    private function serializeContent(array $node): string
+    {
+        usort($node['files'], function ($a, $b) { return strcasecmp($a['name'], $b['name']); });
+        uksort($node['subdirs'], 'strcasecmp');
+
+        // Files
+        $buf = pack('V', count($node['files']));
+        foreach ($node['files'] as $f) {
+            $start  = strlen($this->safData);
+            $len    = strlen($f['data']);
+            $this->safData .= $f['data'];
+            $buf .= pack('V', strlen($f['name']) + 1) . $f['name'] . "\x00";
+            $buf .= pack('P', $start);  // uint64 LE — SAF offset
+            $buf .= pack('V', $len);    // uint32 LE — file size
+            $buf .= pack('V', 0);       // uint32 LE — version = 0
+        }
+
+        // Subfolders
+        $buf .= pack('V', count($node['subdirs']));
+        foreach ($node['subdirs'] as $dirName => $subNode) {
+            $buf .= pack('V', strlen($dirName) + 1) . $dirName . "\x00";
+            $buf .= $this->serializeContent($subNode);
+        }
+
+        return $buf;
+    }
+
+    private function countFiles(array $node): int
+    {
+        $count = count($node['files']);
+        foreach ($node['subdirs'] as $sub) {
+            $count += $this->countFiles($sub);
+        }
+        return $count;
+    }
+}
+
 function schedulerQueueAction(int $jobId, string $queueAction, array $payload, string $createdBy): bool
 {
     $allowedActions = ['UPSERT', 'PAUSE', 'RESUME', 'DELETE', 'RUN_NOW'];
@@ -176,6 +263,92 @@ function schedulerIsAuthorizedAdmin(int $adminStatus): bool
     }, $decoded);
 
     return in_array('TASK_SCHEDULER', $perms, true);
+}
+
+function patchIsAuthorizedAdmin(int $adminStatus): bool
+{
+    if (!in_array($adminStatus, [16, 32, 48], true)) {
+        return false;
+    }
+    if ($adminStatus === 16) {
+        return true;
+    }
+    $permSettingKey = $adminStatus === 32 ? 'GM_Permissions' : 'GMA_Permissions';
+    $rawPerms = appGetWebSetting($permSettingKey, '[]');
+    $decoded = json_decode($rawPerms, true);
+    if (!is_array($decoded)) {
+        return false;
+    }
+    return in_array('PATCH_MANAGER', array_map('strtoupper', $decoded), true);
+}
+
+function patchGetSahKeyHex(): ?string
+{
+    static $cached = false;
+    if ($cached !== false) return $cached;
+
+    $iniPath = 'C:\\ShaiyaServer\\PSM_Client\\Bin\\Data\\GMSecurity.ini';
+    if (!is_file($iniPath)) { $cached = null; return null; }
+
+    $sections = @parse_ini_file($iniPath, true, INI_SCANNER_RAW);
+    if (!is_array($sections)) { $cached = null; return null; }
+
+    $key = isset($sections['SETTINGS']['SahKeyHex']) ? trim((string)$sections['SETTINGS']['SahKeyHex']) : '';
+    $cached = (strlen($key) === 64 && ctype_xdigit($key)) ? $key : null;
+    return $cached;
+}
+
+function patchEsahEncrypt(string $plain, string $keyHex): string
+{
+    $key   = hex2bin($keyHex);
+    $nonce = random_bytes(12);
+    $tag   = '';
+    $cipher = openssl_encrypt($plain, 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $nonce, $tag, '', 16);
+
+    // ESAH header — 64 bytes — matches SahCrypt.cs format exactly
+    $lenLo = strlen($plain) & 0xFFFFFFFF;
+    $lenHi = 0;
+    $header = 'ESAH'                       // [0:4]  magic
+        . pack('v', 1)                     // [4:6]  version uint16 LE
+        . pack('v', 1)                     // [6:8]  flags  uint16 LE (AES-256-GCM)
+        . pack('VV', $lenLo, $lenHi)       // [8:16] plainSize uint64 LE
+        . $nonce                           // [16:28] 12 bytes
+        . $tag                             // [28:44] 16 bytes
+        . str_repeat("\x00", 20);          // [44:64] padding 20 bytes
+
+    return $header . $cipher;
+}
+
+function patchHistoryInsert(
+    string $patchFile,
+    int    $patchVersion,
+    string $description,
+    string $uploadMode,
+    int    $fileSizeBytes,
+    bool   $hasDeleteLst,
+    string $uploadedBy
+): void {
+    global $pdoAdmin;
+    try {
+        $stmt = $pdoAdmin->prepare(
+            "INSERT INTO PS_WebSite.dbo.Web_PatchHistory
+             (PatchFile, PatchVersion, Description, UploadMode, FileSizeBytes, HasDeleteLst, ClientVersionBefore, ClientVersionAfter, UploadedBy)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        );
+        $stmt->execute([
+            $patchFile,
+            $patchVersion,
+            $description,
+            $uploadMode,
+            $fileSizeBytes,
+            $hasDeleteLst ? 1 : 0,
+            $patchVersion - 1,
+            $patchVersion,
+            $uploadedBy,
+        ]);
+    } catch (Throwable $e) {
+        error_log('patchHistoryInsert failed: ' . $e->getMessage());
+    }
 }
 
 function schedulerCommandAllowedByWhitelist(string $commandText): bool
@@ -1903,6 +2076,385 @@ switch ($action) {
             $msg = "Errore DB durante range update.";
             $status = "error";
         }
+        break;
+
+    case 'patch_upload':
+        if (!patchIsAuthorizedAdmin($adminStatus)) {
+            $msg = "Unauthorized. Abilita PATCH_MANAGER in Permissions Management.";
+            break;
+        }
+
+        $patchesDir = realpath(__DIR__ . '/Updater/Patches');
+        if ($patchesDir === false || !is_dir($patchesDir)) {
+            $msg = "Cartella Patches non trovata sul server.";
+            break;
+        }
+        $patchesDir .= DIRECTORY_SEPARATOR;
+
+        $desc = trim((string) ($_POST['patch_desc'] ?? ''));
+        $desc = preg_replace('/[^a-zA-Z0-9_\-]/', '_', $desc);
+        $desc = preg_replace('/_+/', '_', $desc);
+        $desc = trim($desc, '_');
+        if ($desc === '' || mb_strlen($desc) > 80) {
+            $msg = "Descrizione patch non valida (solo lettere, numeri, _ e -, max 80 caratteri).";
+            break;
+        }
+
+        $existingPatches = glob($patchesDir . '*.patch') ?: [];
+        natsort($existingPatches);
+        $nextVersion = count($existingPatches) + 1;
+        $nextPadded  = str_pad($nextVersion, 4, '0', STR_PAD_LEFT);
+        $finalName   = $nextPadded . '_' . $desc . '.patch';
+        $finalPath   = $patchesDir . $finalName;
+
+        if (file_exists($finalPath)) {
+            $msg = "File già esistente: $finalName";
+            break;
+        }
+
+        $uploadMode = (string) ($_POST['upload_mode'] ?? 'sah');
+
+        if ($uploadMode === 'direct') {
+            $patchErr = (int) ($_FILES['patch_file']['error'] ?? UPLOAD_ERR_NO_FILE);
+            if ($patchErr !== UPLOAD_ERR_OK) {
+                $msg = "Nessun file .patch caricato o errore upload (code $patchErr).";
+                break;
+            }
+            $tmpName  = (string) ($_FILES['patch_file']['tmp_name'] ?? '');
+            $fileSize = (int) ($_FILES['patch_file']['size'] ?? 0);
+            if (!is_uploaded_file($tmpName)) { $msg = "Upload non valido."; break; }
+            if ($fileSize <= 0) { $msg = "File vuoto."; break; }
+            $fh = fopen($tmpName, 'rb');
+            $magic = fread($fh, 2);
+            fclose($fh);
+            if ($magic !== 'PK') { $msg = "Il file .patch deve essere un archivio ZIP valido (magic bytes PK mancanti)."; break; }
+            if (!move_uploaded_file($tmpName, $finalPath)) { $msg = "Errore salvataggio patch su disco."; break; }
+            $msg = "Patch caricata: $finalName";
+            $status = "success";
+            appAuditLog('admin_patch_upload_direct', ['admin' => $username, 'patch' => $finalName, 'size' => $fileSize]);
+            patchHistoryInsert($finalName, $nextVersion, $desc, 'direct', (int)filesize($finalPath), false, $username);
+
+        } elseif ($uploadMode === 'sah') {
+            if (!class_exists('ZipArchive')) { $msg = "ZipArchive non disponibile su questo PHP."; break; }
+            $sahErr = (int) ($_FILES['sah_file']['error'] ?? UPLOAD_ERR_NO_FILE);
+            $safErr = (int) ($_FILES['saf_file']['error'] ?? UPLOAD_ERR_NO_FILE);
+            if ($sahErr !== UPLOAD_ERR_OK || $safErr !== UPLOAD_ERR_OK) {
+                $msg = "File SAH e SAF entrambi obbligatori (err_sah=$sahErr err_saf=$safErr).";
+                break;
+            }
+            $sahTmp  = (string) ($_FILES['sah_file']['tmp_name'] ?? '');
+            $safTmp  = (string) ($_FILES['saf_file']['tmp_name'] ?? '');
+            $sahSize = (int) ($_FILES['sah_file']['size'] ?? 0);
+            $safSize = (int) ($_FILES['saf_file']['size'] ?? 0);
+            if (!is_uploaded_file($sahTmp) || !is_uploaded_file($safTmp)) { $msg = "File upload non valido."; break; }
+            if ($sahSize <= 0 || $safSize <= 0) { $msg = "File SAH o SAF vuoti."; break; }
+
+            $deleteLstContent = trim((string) ($_POST['delete_lst_content'] ?? ''));
+
+            $tmpZip = tempnam(sys_get_temp_dir(), 'patch_') . '.zip';
+            $zip = new ZipArchive();
+            if ($zip->open($tmpZip, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) { $msg = "Errore creazione archivio ZIP."; break; }
+
+            // Encrypt update.sah using SahKeyHex from GMSecurity.ini (ESAH format = AES-256-GCM)
+            $sahKeyHex      = patchGetSahKeyHex();
+            $sahEncTmpPath  = null;
+            $sahWasEncrypted = false;
+            if ($sahKeyHex !== null) {
+                $sahPlain = file_get_contents($sahTmp);
+                if ($sahPlain !== false && strlen($sahPlain) >= 3 && substr($sahPlain, 0, 3) === 'SAH') {
+                    $esahData = patchEsahEncrypt($sahPlain, $sahKeyHex);
+                    $sahEncTmpPath = tempnam(sys_get_temp_dir(), 'sahenc_');
+                    file_put_contents($sahEncTmpPath, $esahData);
+                    $zip->addFile($sahEncTmpPath, 'update.sah');
+                    $sahWasEncrypted = true;
+                    unset($sahPlain, $esahData);
+                } else {
+                    $zip->addFile($sahTmp, 'update.sah');
+                }
+            } else {
+                $zip->addFile($sahTmp, 'update.sah');
+            }
+
+            $zip->addFile($safTmp, 'update.saf');
+            if ($deleteLstContent !== '') { $zip->addFromString('delete.lst', $deleteLstContent); }
+            $zip->close();
+            if ($sahEncTmpPath !== null) { @unlink($sahEncTmpPath); }
+
+            if (!rename($tmpZip, $finalPath)) {
+                @unlink($tmpZip);
+                $msg = "Errore spostamento patch in Patches/.";
+                break;
+            }
+            $msg = "Patch creata: $finalName" . ($sahWasEncrypted ? ' (update.sah cifrato ESAH)' : '');
+            $status = "success";
+            appAuditLog('admin_patch_upload_sah', [
+                'admin' => $username, 'patch' => $finalName,
+                'sah_size' => $sahSize, 'saf_size' => $safSize,
+                'has_delete_lst' => $deleteLstContent !== '',
+                'sah_encrypted' => $sahWasEncrypted,
+            ]);
+            patchHistoryInsert($finalName, $nextVersion, $desc, 'sah', (int)filesize($finalPath), $deleteLstContent !== '', $username);
+        } elseif ($uploadMode === 'workspace_zip') {
+            if (!class_exists('ZipArchive')) { $msg = "ZipArchive non disponibile su questo PHP."; break; }
+
+            @ini_set('memory_limit', '512M');
+
+            $wsErr  = (int)    ($_FILES['workspace_zip']['error']    ?? UPLOAD_ERR_NO_FILE);
+            $wsTmp  = (string) ($_FILES['workspace_zip']['tmp_name'] ?? '');
+            $wsSize = (int)    ($_FILES['workspace_zip']['size']     ?? 0);
+
+            if ($wsErr !== UPLOAD_ERR_OK)   { $msg = "Nessun file ZIP caricato o errore upload (code $wsErr)."; break; }
+            if (!is_uploaded_file($wsTmp))  { $msg = "Upload non valido."; break; }
+            if ($wsSize <= 0)               { $msg = "File ZIP vuoto."; break; }
+
+            $wsCheckFh = fopen($wsTmp, 'rb');
+            $wsMagic   = fread($wsCheckFh, 2);
+            fclose($wsCheckFh);
+            if ($wsMagic !== 'PK') { $msg = "Il file deve essere un archivio ZIP valido (magic bytes PK mancanti)."; break; }
+
+            $wsZip = new ZipArchive();
+            if ($wsZip->open($wsTmp) !== true) { $msg = "Impossibile aprire il file ZIP."; break; }
+
+            $wsFiles  = [];
+            $wsTotal  = 0;
+            $wsOk     = true;
+            $wsErrMsg = '';
+
+            for ($zi = 0; $zi < $wsZip->numFiles; $zi++) {
+                $zStat = $wsZip->statIndex($zi);
+                if ($zStat === false) continue;
+                $zName = (string)$zStat['name'];
+
+                if (substr($zName, -1) === '/') continue; // skip directory entries
+
+                if (strpos($zName, '..') !== false || (strlen($zName) > 0 && $zName[0] === '/')) {
+                    $wsOk = false; $wsErrMsg = "Path non ammessa nel ZIP: " . htmlspecialchars($zName); break;
+                }
+                if (strpos($zName, "\x00") !== false) {
+                    $wsOk = false; $wsErrMsg = "Path non valida (null byte): " . htmlspecialchars($zName); break;
+                }
+
+                $zSize = (int)$zStat['size'];
+                if ($zSize > 100 * 1024 * 1024) { $wsOk = false; $wsErrMsg = "File troppo grande (max 100 MB): " . htmlspecialchars($zName); break; }
+                $wsTotal += $zSize;
+                if ($wsTotal > 200 * 1024 * 1024) { $wsOk = false; $wsErrMsg = "Totale decompresso supera 200 MB."; break; }
+
+                $zData = $wsZip->getFromIndex($zi);
+                if ($zData === false) { $wsOk = false; $wsErrMsg = "Errore lettura file dal ZIP: " . htmlspecialchars($zName); break; }
+
+                $wsFiles[] = ['path' => str_replace('\\', '/', $zName), 'data' => $zData];
+            }
+            $wsZip->close();
+
+            if (!$wsOk)          { $msg = $wsErrMsg ?: "ZIP non valido."; break; }
+            if (empty($wsFiles)) { $msg = "Il file ZIP non contiene file validi."; break; }
+
+            $deleteLstContent = trim((string)($_POST['delete_lst_content'] ?? ''));
+
+            // Build SAH + SAF using same binary format as SahSafBuilder.cs
+            $wsSahSaf   = PatchSahBuilder::buildFromFiles($wsFiles);
+            $wsSahPlain = $wsSahSaf['sah'];
+            $wsSafData  = $wsSahSaf['saf'];
+
+            if (strlen($wsSahPlain) < 3 || substr($wsSahPlain, 0, 3) !== 'SAH') {
+                $msg = "Errore interno: SAH generato non valido."; break;
+            }
+
+            // Encrypt SAH → ESAH (AES-256-GCM) if key available
+            $wsSahKeyHex    = patchGetSahKeyHex();
+            $wsSahFinal     = $wsSahPlain;
+            $wsWasEncrypted = false;
+            if ($wsSahKeyHex !== null) {
+                $wsSahFinal     = patchEsahEncrypt($wsSahPlain, $wsSahKeyHex);
+                $wsWasEncrypted = true;
+            }
+
+            // Write temp files for ZipArchive (can't addFromString for large binary)
+            $wsTmpSah = tempnam(sys_get_temp_dir(), 'sahws_');
+            $wsTmpSaf = tempnam(sys_get_temp_dir(), 'safws_');
+            file_put_contents($wsTmpSah, $wsSahFinal);
+            file_put_contents($wsTmpSaf, $wsSafData);
+
+            $wsTmpZip = tempnam(sys_get_temp_dir(), 'patchwz_') . '.zip';
+            $wsOutZip = new ZipArchive();
+            if ($wsOutZip->open($wsTmpZip, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {
+                @unlink($wsTmpSah); @unlink($wsTmpSaf);
+                $msg = "Errore creazione archivio .patch."; break;
+            }
+            $wsOutZip->addFile($wsTmpSah, 'update.sah');
+            $wsOutZip->addFile($wsTmpSaf, 'update.saf');
+            if ($deleteLstContent !== '') { $wsOutZip->addFromString('delete.lst', $deleteLstContent); }
+            $wsOutZip->close();
+            @unlink($wsTmpSah);
+            @unlink($wsTmpSaf);
+
+            if (!rename($wsTmpZip, $finalPath)) {
+                @unlink($wsTmpZip);
+                $msg = "Errore spostamento patch in Patches/."; break;
+            }
+
+            $wsFileCount = count($wsFiles);
+            $msg = "Patch creata da $wsFileCount file: $finalName" . ($wsWasEncrypted ? ' (SAH cifrato ESAH)' : ' (SAH plaintext — chiave non trovata in GMSecurity.ini)');
+            $status = "success";
+            appAuditLog('admin_patch_upload_workspace', [
+                'admin'          => $username,
+                'patch'          => $finalName,
+                'file_count'     => $wsFileCount,
+                'total_bytes'    => $wsTotal,
+                'sah_encrypted'  => $wsWasEncrypted,
+                'has_delete_lst' => $deleteLstContent !== '',
+            ]);
+            patchHistoryInsert($finalName, $nextVersion, $desc, 'workspace', (int)filesize($finalPath), $deleteLstContent !== '', $username);
+
+        } elseif ($uploadMode === 'folder_upload') {
+            // PHP strips directory from $_FILES[...]['name'] — paths arrive via separate ws_paths[] POST fields
+            @ini_set('memory_limit', '512M');
+
+            if (empty($_FILES['ws_files']) || !is_array($_FILES['ws_files']['name'])) {
+                $msg = "Nessun file ricevuto."; break;
+            }
+
+            $wsNames  = (array)$_FILES['ws_files']['name'];
+            $wsTmps   = (array)$_FILES['ws_files']['tmp_name'];
+            $wsErrors = (array)$_FILES['ws_files']['error'];
+            $wsSizes  = (array)$_FILES['ws_files']['size'];
+            // Paths sent separately to bypass PHP basename() stripping on $_FILES['name']
+            $wsPaths  = isset($_POST['ws_paths']) && is_array($_POST['ws_paths'])
+                        ? array_values((array)$_POST['ws_paths'])
+                        : [];
+
+            $wsFiles  = [];
+            $wsTotal  = 0;
+            $wsOk     = true;
+            $wsErrMsg = '';
+
+            foreach ($wsNames as $i => $rawName) {
+                $err  = (int)    ($wsErrors[$i] ?? UPLOAD_ERR_NO_FILE);
+                $tmp  = (string) ($wsTmps[$i]   ?? '');
+                $size = (int)    ($wsSizes[$i]   ?? 0);
+                // Use ws_paths[$i] if available (has full relative path), fallback to filename
+                $rawPath = isset($wsPaths[$i]) ? (string)$wsPaths[$i] : (string)$rawName;
+                $path = str_replace('\\', '/', ltrim($rawPath, '/'));
+
+                if ($err !== UPLOAD_ERR_OK)  { $wsOk = false; $wsErrMsg = "Errore upload: " . htmlspecialchars($path) . " (err=$err)"; break; }
+                if (!is_uploaded_file($tmp)) { $wsOk = false; $wsErrMsg = "File non valido: " . htmlspecialchars($path); break; }
+                if ($path === '')            { continue; }
+
+                if (strpos($path, '..') !== false) {
+                    $wsOk = false; $wsErrMsg = "Path non ammessa: " . htmlspecialchars($path); break;
+                }
+                if (strpos($path, "\x00") !== false) {
+                    $wsOk = false; $wsErrMsg = "Path non valida (null byte): " . htmlspecialchars($path); break;
+                }
+
+                if ($size > 100 * 1024 * 1024) { $wsOk = false; $wsErrMsg = "File troppo grande (max 100 MB): " . htmlspecialchars($path); break; }
+                $wsTotal += $size;
+                if ($wsTotal > 200 * 1024 * 1024) { $wsOk = false; $wsErrMsg = "Totale supera 200 MB."; break; }
+
+                $data = file_get_contents($tmp);
+                if ($data === false) { $wsOk = false; $wsErrMsg = "Errore lettura: " . htmlspecialchars($path); break; }
+
+                $wsFiles[] = ['path' => $path, 'data' => $data];
+            }
+
+            if (!$wsOk)          { $msg = $wsErrMsg ?: "Errore elaborazione file."; break; }
+            if (empty($wsFiles)) { $msg = "Nessun file valido ricevuto."; break; }
+
+            $deleteLstContent = trim((string)($_POST['delete_lst_content'] ?? ''));
+
+            $wsSahSaf   = PatchSahBuilder::buildFromFiles($wsFiles);
+            $wsSahPlain = $wsSahSaf['sah'];
+            $wsSafData  = $wsSahSaf['saf'];
+
+            if (strlen($wsSahPlain) < 3 || substr($wsSahPlain, 0, 3) !== 'SAH') {
+                $msg = "Errore interno: SAH generato non valido."; break;
+            }
+
+            $wsSahKeyHex    = patchGetSahKeyHex();
+            $wsSahFinal     = $wsSahPlain;
+            $wsWasEncrypted = false;
+            if ($wsSahKeyHex !== null) {
+                $wsSahFinal     = patchEsahEncrypt($wsSahPlain, $wsSahKeyHex);
+                $wsWasEncrypted = true;
+            }
+
+            $wsTmpSah = tempnam(sys_get_temp_dir(), 'sahws_');
+            $wsTmpSaf = tempnam(sys_get_temp_dir(), 'safws_');
+            file_put_contents($wsTmpSah, $wsSahFinal);
+            file_put_contents($wsTmpSaf, $wsSafData);
+
+            $wsTmpZip = tempnam(sys_get_temp_dir(), 'patchwz_') . '.zip';
+            $wsOutZip = new ZipArchive();
+            if ($wsOutZip->open($wsTmpZip, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {
+                @unlink($wsTmpSah); @unlink($wsTmpSaf);
+                $msg = "Errore creazione archivio .patch."; break;
+            }
+            $wsOutZip->addFile($wsTmpSah, 'update.sah');
+            $wsOutZip->addFile($wsTmpSaf, 'update.saf');
+            if ($deleteLstContent !== '') { $wsOutZip->addFromString('delete.lst', $deleteLstContent); }
+            $wsOutZip->close();
+            @unlink($wsTmpSah);
+            @unlink($wsTmpSaf);
+
+            if (!rename($wsTmpZip, $finalPath)) {
+                @unlink($wsTmpZip);
+                $msg = "Errore spostamento patch in Patches/."; break;
+            }
+
+            $wsFileCount = count($wsFiles);
+            $msg = "Patch creata da $wsFileCount file: $finalName" . ($wsWasEncrypted ? ' (SAH cifrato ESAH)' : '');
+            $status = "success";
+            appAuditLog('admin_patch_upload_folder', [
+                'admin'          => $username,
+                'patch'          => $finalName,
+                'file_count'     => $wsFileCount,
+                'total_bytes'    => $wsTotal,
+                'sah_encrypted'  => $wsWasEncrypted,
+                'has_delete_lst' => $deleteLstContent !== '',
+            ]);
+            patchHistoryInsert($finalName, $nextVersion, $desc, 'folder', (int)filesize($finalPath), $deleteLstContent !== '', $username);
+
+        } else {
+            $msg = "Modalità upload non valida.";
+        }
+        break;
+
+    case 'patch_delete':
+        if (!patchIsAuthorizedAdmin($adminStatus)) {
+            $msg = "Unauthorized. Abilita PATCH_MANAGER in Permissions Management.";
+            break;
+        }
+
+        $patchesDir = realpath(__DIR__ . '/Updater/Patches');
+        if ($patchesDir === false || !is_dir($patchesDir)) {
+            $msg = "Cartella Patches non trovata sul server.";
+            break;
+        }
+
+        $fileName = basename((string) ($_POST['patch_file'] ?? ''));
+        if (!preg_match('/^\d{4}_[a-zA-Z0-9_\-]+\.patch$/', $fileName)) {
+            $msg = "Nome patch non valido.";
+            break;
+        }
+
+        $filePath = $patchesDir . DIRECTORY_SEPARATOR . $fileName;
+        $realPath = realpath($filePath);
+        if ($realPath === false || strpos($realPath, $patchesDir) !== 0) {
+            $msg = "Path non valido.";
+            break;
+        }
+
+        if (!unlink($realPath)) {
+            $msg = "Errore eliminazione patch.";
+            break;
+        }
+
+        $cacheFile = $patchesDir . DIRECTORY_SEPARATOR . '.hashes' . DIRECTORY_SEPARATOR . $fileName . '.cache';
+        if (file_exists($cacheFile)) { @unlink($cacheFile); }
+
+        $msg = "Patch eliminata: $fileName";
+        $status = "success";
+        appAuditLog('admin_patch_delete', ['admin' => $username, 'patch' => $fileName]);
         break;
 
     default:

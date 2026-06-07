@@ -49,6 +49,30 @@ Steps:
 - `launcher.ini`
 - any private deployment key material
 
+## SahCrypt key — dove si trova
+
+La chiave AES-256 NON è più in `launcher.ini` (rimossa per sicurezza — era accessibile pubblicamente).
+
+**Flusso attuale:**
+
+```
+GMSecurity.ini [SETTINGS] SahKeyHex=<64-hex>
+    └─ api/config.php legge il valore
+         └─ common.php get_sah_key_hex()
+              └─ login.php success_response() → include "sahKey" nella risposta JSON
+                   └─ client riceve la chiave solo dopo autenticazione riuscita
+```
+
+**Allineamento chiavi:**
+
+| Componente | Dove si configura |
+|---|---|
+| Login server (risposta auth) | `GMSecurity.ini [SETTINGS] SahKeyHex=` |
+| SahCryptTool (crea ESAH) | `SahCryptTool/main.cpp kFixedKey` |
+| `launcher.ini [SahCrypt]` | Solo flag Enable/Unlock/Protect — nessuna chiave |
+
+Le tre chiavi devono rappresentare gli stessi 32 byte. Se differiscono, `data.sah` creato da `sahcrypt.exe` non è decriptabile dal launcher.
+
 ## Generate a secure SahCrypt key (KeyHex)
 
 Use a 32-byte random key (64 hex chars).
@@ -61,35 +85,16 @@ $bytes = New-Object byte[] 32
 ($bytes | ForEach-Object { $_.ToString('x2') }) -join ''
 ```
 
-Paste the result into `launcher.ini`:
+Paste the result into `GMSecurity.ini` under `[SETTINGS]`:
 
 ```ini
-[SahCrypt]
-KeyHex=<64-hex-chars>
+[SETTINGS]
+SahKeyHex=<64-hex-chars>
 ```
 
-Notes:
+Also compile the same key into `SahCryptTool/main.cpp` (`kFixedKey`).
 
-- Keep only one key format active (`KeyHex` **or** `KeyText` **or** `KeyBase64` **or** `Key`).
-- If you use `SahCryptTool`, keep the same 32-byte key in the tool and in `launcher.ini`.
-- Replace all sample/testing keys before production.
-
-## SahCrypt key alignment (important)
-
-To use encrypted `data.sah` reliably, keys must match across components:
-
-1. Server runtime key in `launcher.ini`:
-
-   ```ini
-   [SahCrypt]
-   KeyHex=<64-hex-chars>
-   ```
-
-2. Optional template key field in `launcher.sample.ini` (documentation only).
-
-3. C++ tool key in `SahCryptTool/main.cpp` (`kFixedKey`) must represent the same 32 bytes.
-
-If these keys differ, encrypted files created by `sahcrypt.exe` may not be decryptable by launcher runtime logic.
+Do NOT put the key in `launcher.ini` — it is publicly accessible.
 
 ## Baseline `launcher.ini` (`[Game]`)
 
@@ -139,32 +144,65 @@ http://127.0.0.1/Updater/test-db.php
 http://127.0.0.1/Updater/test-config.php
 ```
 
-## Patch workflow (step-by-step)
+## Patch workflow (automatico)
 
-1. Put patch payload files in:
+### Metodo raccomandato — Admin Panel web
 
-```txt
-ServerSide/Updater/Patches
+Il modo più semplice è usare il **Patch Manager** nel pannello admin del sito:
+
+```
+Sito admin → WEBSITE → Patch Manager
 ```
 
-2. Ensure each patch file uses `.patch` extension.
+**Procedura:**
 
-3. Generate patch manifest entries (localhost only):
+1. Modifica i file game localmente → metti in `data/` con stesso percorso del data.sah/saf
+2. Esegui `SHAIYA_MAKE.exe` localmente → ottieni `Files/data.sah` + `Files/data.saf`
+3. Rinomina: `data.sah → update.sah`, `data.saf → update.saf`
+4. Apri admin panel → WEBSITE → Patch Manager
+5. Tab "Crea da SAH/SAF": carica `update.sah` + `update.saf`, inserisci descrizione
+6. Click "Crea e Carica Patch" → fatto
 
-```txt
-http://127.0.0.1/Updater/tools/patch_hashes.php
+Il server crea il ZIP, assegna la versione `NNNN`, aggiorna il manifest automaticamente.
+
+**Alternativa:** se hai già il file `.patch` pronto (creato con `crea_patch.bat`), usa il tab "Upload .patch diretto".
+
+### Metodo alternativo — Copia file manuale
+
+**Un solo passo:** copia il file `.patch` nella cartella `Patches/` con nome numerato.
+
+```
+Patches/
+  0001_initial_client.patch
+  0002_fix_login.patch
+  0003_new_content.patch
 ```
 
-4. Copy the generated `patches` array into `manifest.json`.
+Il sistema genera automaticamente `patches[]`, `clientVersion` e `ManifestSha256` ad ogni richiesta.
+Non è necessario modificare `manifest.json` né chiamare strumenti aggiuntivi.
 
-5. Set `manifest.json` `clientVersion` to the target version expected after applying all patches.
+### Naming convention (obbligatoria)
 
-6. Deploy `manifest.json`.
+```
+NNNN_descrizione.patch
+```
 
-Code alignment:
+- Prefisso numerico zero-padded = ordine di applicazione
+- Sort naturale del filename = ordine versioni = version number (1-based)
+- Nessun salto di versione: il client cerca v1, v2, v3... sequenzialmente
 
-- Launcher applies versions sequentially from `Local_ClientVersion + 1` to `clientVersion`.
-- Each patch version must exist in manifest (`patches[].version`) and be reachable by URL (`patches[].file`).
+### Formato file `.patch`
+
+ZIP contenente:
+- (opzionale) `update.sah` + `update.saf` — merge nell'archivio SAH del gioco
+- qualsiasi altro file — copiato nella dir del gioco con backup/rollback automatico
+
+### Code alignment
+
+- Client applica versioni da `Local_ClientVersion + 1` a `clientVersion` sequenzialmente.
+- `clientVersion` = numero totale di `.patch` trovati in `Patches/` (auto).
+- URL download: `BaseUrl + "Patches/" + filename`.
+- Vedi `tools/README.md` per dettagli completi e diagnostica.
 
 ## Repair workflow (step-by-step)
 

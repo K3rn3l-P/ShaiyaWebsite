@@ -120,12 +120,11 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && $regEnabled == '1') {
                     header("Location: /register");
                     exit;
                 } else {
-                    // Insert new user with hashed password (Enpassword) + plaintext (Pw for legacy game engine)
                     $user_ip = substr($_SERVER['REMOTE_ADDR'], 0, 15); // Max length for UserIp is 15
                     $passwordHash = appHashPbkdf2($password);
                     try {
-                        $insert_stmt = $pdoAdmin->prepare("INSERT INTO PS_UserData.dbo.Users_Master (UserID, Pw, Enpassword, Email, JoinDate, Admin, AdminLevel, UseQueue, Status, [Leave], LeaveDate, UserType, UserIp, Point, PasswordHashedAt) VALUES (?, ?, ?, ?, GETDATE(), 0, 0, 0, 0, 0, NULL, 'N', ?, 0, GETDATE())");
-                        $insert_stmt->execute([$username, $password, $passwordHash, $email, $user_ip]);
+                        $insert_stmt = $pdoAdmin->prepare("INSERT INTO PS_UserData.dbo.Users_Master (UserID, Enpassword, Email, JoinDate, Admin, AdminLevel, UseQueue, Status, [Leave], LeaveDate, UserType, UserIp, Point, PasswordHashedAt) VALUES (?, ?, ?, GETDATE(), 0, 0, 0, 0, 0, NULL, 'N', ?, 0, GETDATE())");
+                        $insert_stmt->execute([$username, $passwordHash, $email, $user_ip]);
                         session_regenerate_id(true);
                         $_SESSION['user'] = $username;
                         appRotateCsrfToken();
