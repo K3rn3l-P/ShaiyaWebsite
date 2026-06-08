@@ -43,5 +43,6 @@ return [
     // Tutti i segreti di gioco da GMSecurity.ini [SETTINGS]:
     'token_secret'  => $readGm('TokenSecret',  'TOKEN_SECRET'),   // GM saved-account HMAC
     'client_secret' => $readGm('ClientSecret', 'CLIENT_SECRET'),  // 0xA101 client auth
-    'sah_key_hex'   => $readGm('SahKeyHex',    'SAH_KEY_HEX'),    // AES-256 data.sah
+    'sah_key_hex'   => $readGm('SahKeyHex',    'SAH_KEY_HEX'),    // AES-256 data.sah (client live)
+    'patch_key_hex' => $readGm('PatchKeyHex',  'PATCH_KEY_HEX'),  // AES-256 patch/update files
 ];

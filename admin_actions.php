@@ -282,7 +282,7 @@ function patchIsAuthorizedAdmin(int $adminStatus): bool
     return in_array('PATCH_MANAGER', array_map('strtoupper', $decoded), true);
 }
 
-function patchGetSahKeyHex(): ?string
+function patchGetPatchKeyHex(): ?string
 {
     static $cached = false;
     if ($cached !== false) return $cached;
@@ -293,10 +293,13 @@ function patchGetSahKeyHex(): ?string
     $sections = @parse_ini_file($iniPath, true, INI_SCANNER_RAW);
     if (!is_array($sections)) { $cached = null; return null; }
 
-    $key = isset($sections['SETTINGS']['SahKeyHex']) ? trim((string)$sections['SETTINGS']['SahKeyHex']) : '';
+    $key = isset($sections['SETTINGS']['PatchKeyHex']) ? trim((string)$sections['SETTINGS']['PatchKeyHex']) : '';
     $cached = (strlen($key) === 64 && ctype_xdigit($key)) ? $key : null;
     return $cached;
 }
+
+/** @deprecated Usa patchGetPatchKeyHex() — mantenuto per compatibilità temporanea. */
+function patchGetSahKeyHex(): ?string { return patchGetPatchKeyHex(); }
 
 function patchEsahEncrypt(string $plain, string $keyHex): string
 {
@@ -2194,6 +2197,7 @@ switch ($action) {
                 'sah_encrypted' => $sahWasEncrypted,
             ]);
             patchHistoryInsert($finalName, $nextVersion, $desc, 'sah', (int)filesize($finalPath), $deleteLstContent !== '', $username);
+
         } elseif ($uploadMode === 'workspace_zip') {
             if (!class_exists('ZipArchive')) { $msg = "ZipArchive non disponibile su questo PHP."; break; }
 
@@ -2306,6 +2310,7 @@ switch ($action) {
             ]);
             patchHistoryInsert($finalName, $nextVersion, $desc, 'workspace', (int)filesize($finalPath), $deleteLstContent !== '', $username);
 
+
         } elseif ($uploadMode === 'folder_upload') {
             // PHP strips directory from $_FILES[...]['name'] — paths arrive via separate ws_paths[] POST fields
             @ini_set('memory_limit', '512M');
@@ -2413,6 +2418,7 @@ switch ($action) {
                 'has_delete_lst' => $deleteLstContent !== '',
             ]);
             patchHistoryInsert($finalName, $nextVersion, $desc, 'folder', (int)filesize($finalPath), $deleteLstContent !== '', $username);
+
 
         } else {
             $msg = "Modalità upload non valida.";
