@@ -470,7 +470,7 @@ function schedulerBuildSimpleMeta(array $postData, string &$errorMessage): ?arra
         $columnName = trim((string) end($columnParts));
     }
 
-    if (!in_array($databaseName, schedulerAllowedSimpleDatabases($conn), true)) {
+    if (!in_array($databaseName, schedulerAllowedSimpleDatabases(), true)) {
         $errorMessage = 'Selected database is not allowed.';
         return null;
     }
