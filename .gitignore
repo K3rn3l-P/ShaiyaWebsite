@@ -53,12 +53,19 @@ uploads/news/*
 !uploads/news/.gitkeep
 
 # ───Updater (tracciare solo file di configurazione e hash, escludere tutto il resto) ───
-Updater/Files
+Updater/Files/*
 !Updater/Files/.gitkeep
+!Updater/Files/.htaccess
 !Updater/Files/.hashes
-Updater/Patches
+!Updater/Files/.hashes/.htaccess
+!Updater/Files/.hashes/.manifest.sha256
+Updater/Files/.hashes/*.cache
+Updater/Patches/*
 !Updater/Patches/.gitkeep
 !Updater/Patches/.hashes
+!Updater/Patches/.hashes/.htaccess
+!Updater/Patches/.hashes/.manifest.sha256
+Updater/Patches/.hashes/*.cache
 
 # ─── Build artifacts (non tracciare) ───
 htdocs/*

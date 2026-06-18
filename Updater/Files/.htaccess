@@ -1,0 +1,13 @@
+# Updater/Files — file scaricabili dal client updater.
+# Il root .htaccess blocca tutti i .ini a livello globale;
+# questo file re-autorizza esplicitamente i .ini in questa directory,
+# necessari per CONFIG.INI e updater_version.ini scaricati dall'updater.
+<FilesMatch "\.(ini)$">
+    <IfModule mod_authz_core.c>
+        Require all granted
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Allow from all
+    </IfModule>
+</FilesMatch>

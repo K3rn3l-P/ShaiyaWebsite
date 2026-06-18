@@ -10,26 +10,28 @@
 
 -- ============================================================
 -- PS_UserData
--- OPS trovate: SELECT (Users_Master, AdminUserWhitelist, AdminIPWhitelist)
---              INSERT (AdminUserWhitelist, AdminIPWhitelist)
---              UPDATE (Users_Master — Point, Status, Enpassword)
--- RIMOSSE:     MioRuoloDelete (nessuna DELETE trovata nel codice)
+-- OPS trovate (web + updater-api):
+--   SELECT  (Users_Master, AdminUserWhitelist, AdminIPWhitelist,
+--            Updater_SavedDeviceAccount)
+--   INSERT  (AdminUserWhitelist, AdminIPWhitelist,
+--            Updater_SavedDeviceAccount)
+--   UPDATE  (Users_Master — Point/Status/Enpassword,
+--            Updater_SavedDeviceAccount — LastUsedAt/LastIP)
+--   DELETE  (Updater_SavedDeviceAccount — rimozione device salvato)
+--   EXECUTE (CheckPw_Safe SP — validazione password updater)
+-- NOTA: DELETE e EXECUTE servono all'updater-api, non solo al sito.
 -- ============================================================
 USE [PS_UserData];
 GO
 IF EXISTS (SELECT 1 FROM sys.database_principals WHERE name = 'Ernoweb@')
 BEGIN
-    IF IS_ROLEMEMBER('MioRuoloDelete', 'Ernoweb@') = 1
-        EXEC sp_droprolemember 'MioRuoloDelete', 'Ernoweb@';
+    IF IS_ROLEMEMBER('MioRuoloRead',    'Ernoweb@') = 0 EXEC sp_addrolemember 'MioRuoloRead',    'Ernoweb@';
+    IF IS_ROLEMEMBER('MioRuoloInsert',  'Ernoweb@') = 0 EXEC sp_addrolemember 'MioRuoloInsert',  'Ernoweb@';
+    IF IS_ROLEMEMBER('MioRuoloUpdate',  'Ernoweb@') = 0 EXEC sp_addrolemember 'MioRuoloUpdate',  'Ernoweb@';
+    IF IS_ROLEMEMBER('MioRuoloDelete',  'Ernoweb@') = 0 EXEC sp_addrolemember 'MioRuoloDelete',  'Ernoweb@';
+    IF IS_ROLEMEMBER('MioRuoloExecute', 'Ernoweb@') = 0 EXEC sp_addrolemember 'MioRuoloExecute', 'Ernoweb@';
 
-    IF IS_ROLEMEMBER('MioRuoloRead', 'Ernoweb@') = 0
-        EXEC sp_addrolemember 'MioRuoloRead', 'Ernoweb@';
-    IF IS_ROLEMEMBER('MioRuoloInsert', 'Ernoweb@') = 0
-        EXEC sp_addrolemember 'MioRuoloInsert', 'Ernoweb@';
-    IF IS_ROLEMEMBER('MioRuoloUpdate', 'Ernoweb@') = 0
-        EXEC sp_addrolemember 'MioRuoloUpdate', 'Ernoweb@';
-
-    PRINT 'PS_UserData: Ernoweb@ aggiornato → READ + INSERT + UPDATE';
+    PRINT 'PS_UserData: Ernoweb@ verificato → READ + INSERT + UPDATE + DELETE + EXECUTE';
 END
 ELSE
     PRINT 'PS_UserData: Ernoweb@ non esiste — saltato';
@@ -173,7 +175,7 @@ GO
 -- ============================================================
 -- DB            | Ruoli DOPO questo script
 -- --------------|------------------------------------------
--- PS_UserData   | READ, INSERT, UPDATE
+-- PS_UserData   | READ, INSERT, UPDATE, DELETE, EXECUTE
 -- PS_Billing    | (nessuno)
 -- PS_GameData   | READ, INSERT, UPDATE, DELETE
 -- PS_GameDefs   | READ, UPDATE, EXECUTE
