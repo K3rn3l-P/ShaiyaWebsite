@@ -1,3 +1,6 @@
+# ─── Claude Code internal ───
+.claude/
+
 # ─── Sensitive / Environment ───
 db.php
 db_pdo.php
