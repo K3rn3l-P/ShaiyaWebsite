@@ -87,23 +87,24 @@ GO
 -- ============================================================
 -- PS_GameDefs
 -- OPS trovate: SELECT (Mobs, Items, MobItems, MapNames)
+--              INSERT (MobItems — drops_add_row: aggiunge slot drop)
 --              UPDATE (MobItems, Mobs — drops editor + bosses editor)
+--              DELETE (MobItems — drops_delete_row: rimuove slot drop)
 --              EXECUTE ([dbo].[Command] — comandi gioco /nt /exp2x ecc.)
--- RIMOSSE:     MioRuoloInsert (nessun INSERT trovato)
--- AGGIUNTE:    MioRuoloExecute (EXEC Command SP da admin_actions.php)
+-- AGGIUNTE:    MioRuoloInsert, MioRuoloDelete (drops editor FASE 1)
+--              MioRuoloExecute (EXEC Command SP da admin_actions.php)
 -- ============================================================
 USE [PS_GameDefs];
 GO
 IF EXISTS (SELECT 1 FROM sys.database_principals WHERE name = 'Ernoweb@')
 BEGIN
-    IF IS_ROLEMEMBER('MioRuoloInsert', 'Ernoweb@') = 1
-        EXEC sp_droprolemember 'MioRuoloInsert', 'Ernoweb@';
-
     IF IS_ROLEMEMBER('MioRuoloRead',    'Ernoweb@') = 0 EXEC sp_addrolemember 'MioRuoloRead',    'Ernoweb@';
+    IF IS_ROLEMEMBER('MioRuoloInsert',  'Ernoweb@') = 0 EXEC sp_addrolemember 'MioRuoloInsert',  'Ernoweb@';
     IF IS_ROLEMEMBER('MioRuoloUpdate',  'Ernoweb@') = 0 EXEC sp_addrolemember 'MioRuoloUpdate',  'Ernoweb@';
+    IF IS_ROLEMEMBER('MioRuoloDelete',  'Ernoweb@') = 0 EXEC sp_addrolemember 'MioRuoloDelete',  'Ernoweb@';
     IF IS_ROLEMEMBER('MioRuoloExecute', 'Ernoweb@') = 0 EXEC sp_addrolemember 'MioRuoloExecute', 'Ernoweb@';
 
-    PRINT 'PS_GameDefs: Ernoweb@ aggiornato → READ + UPDATE + EXECUTE';
+    PRINT 'PS_GameDefs: Ernoweb@ aggiornato → READ + INSERT + UPDATE + DELETE + EXECUTE';
 END
 ELSE
     PRINT 'PS_GameDefs: Ernoweb@ non esiste — saltato';
@@ -178,7 +179,7 @@ GO
 -- PS_UserData   | READ, INSERT, UPDATE, DELETE, EXECUTE
 -- PS_Billing    | (nessuno)
 -- PS_GameData   | READ, INSERT, UPDATE, DELETE
--- PS_GameDefs   | READ, UPDATE, EXECUTE
+-- PS_GameDefs   | READ, INSERT, UPDATE, DELETE, EXECUTE
 -- PS_GameLog    | READ
 -- PS_WebSite    | READ, INSERT, UPDATE, DELETE, ALTER
 -- ============================================================

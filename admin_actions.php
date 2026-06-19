@@ -93,6 +93,123 @@ $msg = "";
 $status = "error";
 $adminActionLockKey = 'admin_action_lock:' . $adminUID . ':' . $clientIp;
 
+// ── GET endpoint: drops_search_items (AJAX, read-only) ──────────────────
+if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['action']) && $_GET['action'] === 'drops_search_items') {
+    header('Content-Type: application/json; charset=utf-8');
+
+    if ($adminStatus != 16 && !in_array($adminStatus, [32, 48])) {
+        echo json_encode(['ok' => false, 'items' => []]);
+        exit;
+    }
+    if (!appVerifyCsrfToken((string) ($_GET['csrf_token'] ?? ''))) {
+        echo json_encode(['ok' => false, 'items' => []]);
+        exit;
+    }
+    $q     = trim((string) ($_GET['q'] ?? ''));
+    $grade = isset($_GET['grade']) ? (int)$_GET['grade'] : 0;
+
+    // Ricerca per Grade esatto (ItemID = Grade in questo DB)
+    if ($grade > 0) {
+        try {
+            $srch = $pdoAdmin->prepare("SELECT Grade, ItemName, Reqlevel FROM PS_GameDefs.dbo.Items WHERE Grade = ? AND Grade > 0");
+            $srch->execute([$grade]);
+            $items = $srch->fetchAll(PDO::FETCH_ASSOC);
+            echo json_encode(['ok' => true, 'items' => $items]);
+        } catch (Throwable $e) {
+            echo json_encode(['ok' => false, 'items' => []]);
+        }
+        exit;
+    }
+
+    if (strlen($q) < 2) {
+        echo json_encode(['ok' => true, 'items' => []]);
+        exit;
+    }
+    try {
+        $srch = $pdoAdmin->prepare("
+            SELECT TOP 20 Grade, ItemName, Reqlevel
+            FROM PS_GameDefs.dbo.Items
+            WHERE ItemName LIKE ?
+              AND LEFT(ItemName, 1) != CHAR(63)
+              AND Grade > 0
+            ORDER BY Reqlevel ASC, ItemName ASC
+        ");
+        $srch->execute(['%' . $q . '%']);
+        $items = $srch->fetchAll(PDO::FETCH_ASSOC);
+        echo json_encode(['ok' => true, 'items' => $items]);
+    } catch (Throwable $e) {
+        echo json_encode(['ok' => false, 'items' => []]);
+    }
+    exit;
+}
+
+// ── GET endpoint: drops_get_slots (AJAX, read-only) ─────────────────────
+if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['action']) && $_GET['action'] === 'drops_get_slots') {
+    header('Content-Type: application/json; charset=utf-8');
+
+    if ($adminStatus != 16 && !in_array($adminStatus, [32, 48])) {
+        echo json_encode(['ok' => false, 'error' => 'Unauthorized']);
+        exit;
+    }
+    if (!appVerifyCsrfToken((string) ($_GET['csrf_token'] ?? ''))) {
+        echo json_encode(['ok' => false, 'error' => 'Invalid CSRF']);
+        exit;
+    }
+    $gsMobId = (int)($_GET['mob_id'] ?? 0);
+    if ($gsMobId <= 0) {
+        echo json_encode(['ok' => false, 'error' => 'Invalid mob_id']);
+        exit;
+    }
+    try {
+        $mStmt = $pdoAdmin->prepare("
+            SELECT m.MobID, m.MobName, m.Level, m.HP, m.Attrib, m.MapID, mn.MapName
+            FROM PS_GameDefs.dbo.Mobs m
+            LEFT JOIN PS_GameDefs.dbo.MapNames mn ON mn.MapID = m.MapID
+            WHERE m.MobID = ?
+        ");
+        $mStmt->execute([$gsMobId]);
+        $mob = $mStmt->fetch(PDO::FETCH_ASSOC);
+        if (!$mob) {
+            echo json_encode(['ok' => false, 'error' => 'Mob not found']);
+            exit;
+        }
+        $sStmt = $pdoAdmin->prepare("
+            SELECT mi.RowID, mi.ItemOrder, mi.Grade, mi.DropRate,
+                   i.ItemName, i.Reqlevel
+            FROM PS_GameDefs.dbo.MobItems mi
+            OUTER APPLY (SELECT TOP 1 ItemName, Reqlevel FROM PS_GameDefs.dbo.Items WHERE Grade = mi.Grade) i
+            WHERE mi.MobID = ?
+            ORDER BY mi.ItemOrder ASC
+        ");
+        $sStmt->execute([$gsMobId]);
+        $slotsRaw = $sStmt->fetchAll(PDO::FETCH_ASSOC);
+
+        $slots = [];
+        for ($i = 1; $i <= 9; $i++) {
+            $slots[$i] = ['ord' => $i, 'rowid' => 0, 'grade' => 0, 'drop_rate' => 0,
+                          'item_name' => null, 'req_level' => 0, 'filled' => false];
+        }
+        foreach ($slotsRaw as $sr) {
+            $o = (int)$sr['ItemOrder'];
+            if ($o >= 1 && $o <= 9) {
+                $slots[$o] = [
+                    'ord'       => $o,
+                    'rowid'     => (int)$sr['RowID'],
+                    'grade'     => (int)$sr['Grade'],
+                    'drop_rate' => (int)$sr['DropRate'],
+                    'item_name' => $sr['ItemName'],
+                    'req_level' => (int)($sr['Reqlevel'] ?? 0),
+                    'filled'    => (int)$sr['Grade'] > 0,
+                ];
+            }
+        }
+        echo json_encode(['ok' => true, 'mob' => $mob, 'slots' => array_values($slots)]);
+    } catch (Throwable $e) {
+        echo json_encode(['ok' => false, 'error' => 'DB error']);
+    }
+    exit;
+}
+
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     header("Location: /admin");
     exit;
@@ -982,6 +1099,60 @@ switch ($action) {
         } else {
             $msg = "Errore aggiornamento cooldown.";
         }
+        break;
+
+    case 'items_csv_import':
+        if ($adminStatus != 16) { $msg = "Unauthorized."; $status = "error"; break; }
+        if (!isset($_FILES['csv_file']) || $_FILES['csv_file']['error'] !== UPLOAD_ERR_OK) {
+            $msg = "Nessun file caricato o errore upload."; $status = "error"; break;
+        }
+        $csvName = basename($_FILES['csv_file']['name']);
+        $csvPath = $_FILES['csv_file']['tmp_name'];
+        if (!preg_match('/\.(csv|txt)$/i', $csvName)) {
+            $msg = "Il file deve essere un CSV."; $status = "error"; break;
+        }
+        $fh = @fopen($csvPath, 'r');
+        if (!$fh) { $msg = "Impossibile leggere il file."; $status = "error"; break; }
+        // Rilevamento separatore (virgola o punto e virgola)
+        $firstLine = fgets($fh);
+        rewind($fh);
+        $sep = substr_count($firstLine, ';') > substr_count($firstLine, ',') ? ';' : ',';
+        $inserted = 0; $updated = 0; $skipped = 0; $errors = 0;
+        $batch = []; $lineNum = 0;
+        try {
+            $pdoAdmin->beginTransaction();
+            while (($cols = fgetcsv($fh, 0, $sep)) !== false) {
+                $lineNum++;
+                if ($lineNum === 1) continue; // salta header
+                // Colonne: 0=Type, 1=TypeID, 2=Name, 6=MinLevel, 30=Slot, 48=Grade
+                $grade = isset($cols[48]) ? (int)$cols[48] : 0;
+                $name  = isset($cols[2])  ? trim($cols[2])  : '';
+                $level = isset($cols[6])  ? (int)$cols[6]  : 0;
+                if ($grade <= 0 || $name === '' || strpos($name, '???') === 0) { $skipped++; continue; }
+                // MERGE: aggiorna o inserisce
+                $mStmt = $pdoAdmin->prepare("
+                    MERGE PS_GameDefs.dbo.Items AS t
+                    USING (SELECT ? AS Grade, ? AS ItemName, ? AS Reqlevel) AS s
+                    ON t.Grade = s.Grade
+                    WHEN MATCHED THEN UPDATE SET t.ItemName = s.ItemName, t.Reqlevel = s.Reqlevel
+                    WHEN NOT MATCHED THEN INSERT (Grade, ItemName, Reqlevel) VALUES (s.Grade, s.ItemName, s.Reqlevel);
+                ");
+                $mStmt->execute([$grade, $name, $level]);
+                $rows = $mStmt->rowCount();
+                if ($rows > 0) { if ($rows === 2) $updated++; else $inserted++; } // MERGE: 1=insert, 2=update
+                if (count($batch) >= 500) { $batch = []; } // batch counter
+            }
+            $pdoAdmin->commit();
+            $msg = "Import completato.";
+            $status = "success";
+            $_SESSION['items_csv_result'] = ['status' => 'ok', 'msg' => $msg, 'inserted' => $inserted, 'updated' => $updated, 'skipped' => $skipped, 'errors' => $errors];
+            appAuditLog('admin_items_csv_import', ['admin' => $username, 'file' => $csvName, 'inserted' => $inserted, 'updated' => $updated, 'skipped' => $skipped]);
+        } catch (Throwable $e) {
+            if ($pdoAdmin->inTransaction()) $pdoAdmin->rollBack();
+            $msg = "Errore DB durante import CSV."; $status = "error";
+            $_SESSION['items_csv_result'] = ['status' => 'error', 'msg' => $msg];
+        }
+        fclose($fh);
         break;
 
     case 'drops_config':
@@ -1972,8 +2143,8 @@ switch ($action) {
                                 AdminUID INT NOT NULL, AdminID VARCHAR(32) NOT NULL,
                                 RowID INT NOT NULL, MobID INT NOT NULL, MobName NVARCHAR(100) NULL,
                                 ItemOrder TINYINT NOT NULL,
-                                OldGrade SMALLINT NULL, NewGrade SMALLINT NOT NULL,
-                                OldDropRate INT NULL, NewDropRate INT NOT NULL,
+                                OldGrade SMALLINT NULL, NewGrade SMALLINT NULL,
+                                OldDropRate INT NULL, NewDropRate INT NULL,
                                 ChangedAt DATETIME NOT NULL DEFAULT GETDATE()
                             );
                             CREATE INDEX IX_Web_DropsEditLog_AdminUID ON PS_WebSite.dbo.Web_DropsEditLog(AdminUID, ChangedAt DESC);
@@ -2000,6 +2171,102 @@ switch ($action) {
         }
         break;
 
+    case 'drops_add_row':
+        if ($adminStatus != 16) { $msg = "Unauthorized."; $status = "error"; break; }
+        $addMobId  = isset($_POST['mob_id'])     ? (int) $_POST['mob_id']     : 0;
+        $addOrder  = isset($_POST['item_order']) ? (int) $_POST['item_order'] : 0;
+        $addGrade  = isset($_POST['grade'])      ? (int) $_POST['grade']      : 0;
+        $addDr     = isset($_POST['drop_rate'])  ? (int) $_POST['drop_rate']  : -1;
+        if ($addMobId <= 0 || $addOrder < 1 || $addOrder > 9 || $addGrade <= 0 || $addDr < 0) {
+            $msg = "Parametri non validi."; $status = "error"; break;
+        }
+        $addMaxDr = ($addOrder >= 7) ? 1000000 : 100;
+        if ($addDr > $addMaxDr) { $msg = "DropRate fuori range (max $addMaxDr per slot $addOrder)."; $status = "error"; break; }
+        if (!appRateLimitAllow('drops_edit:' . $username, 60, 60)) {
+            $msg = "Rate limit raggiunto. Attendi prima di continuare."; $status = "error"; break;
+        }
+        try {
+            // Verifica slot libero
+            $chkSlot = $pdoAdmin->prepare("SELECT COUNT(*) FROM PS_GameDefs.dbo.MobItems WHERE MobID=? AND ItemOrder=?");
+            $chkSlot->execute([$addMobId, $addOrder]);
+            if ((int)$chkSlot->fetchColumn() > 0) {
+                $msg = "Slot $addOrder già occupato per MobID $addMobId."; $status = "error"; break;
+            }
+            // Verifica grade esiste
+            $chkGrd = $pdoAdmin->prepare("SELECT ItemName FROM PS_GameDefs.dbo.Items WHERE Grade=?");
+            $chkGrd->execute([$addGrade]);
+            $gradeRow = $chkGrd->fetch(PDO::FETCH_ASSOC);
+            if (!$gradeRow) { $msg = "Grade $addGrade non trovato in Items."; $status = "error"; break; }
+
+            $insStmt = $pdoAdmin->prepare("INSERT INTO PS_GameDefs.dbo.MobItems (MobID, ItemOrder, Grade, DropRate) OUTPUT INSERTED.RowID VALUES (?,?,?,?)");
+            $insStmt->execute([$addMobId, $addOrder, $addGrade, $addDr]);
+            $newRowId = (int)($insStmt->fetchColumn() ?: 0);
+
+            // Leggi MobName per log
+            $mnStmt = $pdoAdmin->prepare("SELECT MobName FROM PS_GameDefs.dbo.Mobs WHERE MobID=?");
+            $mnStmt->execute([$addMobId]);
+            $addMobName = (string)($mnStmt->fetchColumn() ?? '');
+
+            // Log: OldGrade/OldDropRate = NULL → indica INSERT (undo = DELETE)
+            try {
+                $pdoAdmin->exec("
+                    IF NOT EXISTS (SELECT * FROM PS_WebSite.sys.objects WHERE object_id = OBJECT_ID(N'PS_WebSite.dbo.Web_DropsEditLog') AND type = N'U')
+                    BEGIN
+                        CREATE TABLE PS_WebSite.dbo.Web_DropsEditLog (
+                            LogID INT IDENTITY(1,1) PRIMARY KEY,
+                            AdminUID INT NOT NULL, AdminID VARCHAR(32) NOT NULL,
+                            RowID INT NOT NULL, MobID INT NOT NULL, MobName NVARCHAR(100) NULL,
+                            ItemOrder TINYINT NOT NULL,
+                            OldGrade SMALLINT NULL, NewGrade SMALLINT NULL,
+                            OldDropRate INT NULL, NewDropRate INT NULL,
+                            ChangedAt DATETIME NOT NULL DEFAULT GETDATE()
+                        );
+                        CREATE INDEX IX_Web_DropsEditLog_AdminUID ON PS_WebSite.dbo.Web_DropsEditLog(AdminUID, ChangedAt DESC);
+                    END
+                ");
+                $logIns = $pdoAdmin->prepare("INSERT INTO PS_WebSite.dbo.Web_DropsEditLog (AdminUID,AdminID,RowID,MobID,MobName,ItemOrder,OldGrade,NewGrade,OldDropRate,NewDropRate) VALUES (?,?,?,?,?,?,NULL,?,NULL,?)");
+                $logIns->execute([$adminUID, $username, $newRowId, $addMobId, $addMobName, $addOrder, $addGrade, $addDr]);
+            } catch (Throwable $e) {}
+
+            $msg = "Slot $addOrder aggiunto a MobID $addMobId" . ($addMobName ? " ($addMobName)" : '') . " — Grade $addGrade, DropRate $addDr.";
+            $status = "success";
+            appAuditLog('admin_drops_add_row', ['admin' => $username, 'mob_id' => $addMobId, 'item_order' => $addOrder, 'grade' => $addGrade, 'drop_rate' => $addDr]);
+        } catch (Throwable $e) {
+            $msg = "Errore DB durante INSERT slot drop."; $status = "error";
+        }
+        break;
+
+    case 'drops_delete_row':
+        if ($adminStatus != 16) { $msg = "Unauthorized."; $status = "error"; break; }
+        $delRowId = isset($_POST['row_id']) ? (int) $_POST['row_id'] : 0;
+        if ($delRowId <= 0) { $msg = "RowID non valido."; $status = "error"; break; }
+        if (!appRateLimitAllow('drops_edit:' . $username, 60, 60)) {
+            $msg = "Rate limit raggiunto."; $status = "error"; break;
+        }
+        try {
+            // Leggi dati prima di eliminare (per log + undo)
+            $preStmt = $pdoAdmin->prepare("SELECT mi.RowID, mi.MobID, mi.ItemOrder, mi.Grade, mi.DropRate, m.MobName FROM PS_GameDefs.dbo.MobItems mi LEFT JOIN PS_GameDefs.dbo.Mobs m ON m.MobID=mi.MobID WHERE mi.RowID=?");
+            $preStmt->execute([$delRowId]);
+            $preRow = $preStmt->fetch(PDO::FETCH_ASSOC);
+            if (!$preRow) { $msg = "RowID $delRowId non trovato."; $status = "error"; break; }
+
+            $delStmt = $pdoAdmin->prepare("DELETE FROM PS_GameDefs.dbo.MobItems WHERE RowID=?");
+            $delStmt->execute([$delRowId]);
+
+            // Log: NewGrade/NewDropRate = NULL → indica DELETE (undo = re-INSERT)
+            try {
+                $logDel = $pdoAdmin->prepare("INSERT INTO PS_WebSite.dbo.Web_DropsEditLog (AdminUID,AdminID,RowID,MobID,MobName,ItemOrder,OldGrade,NewGrade,OldDropRate,NewDropRate) VALUES (?,?,?,?,?,?,?,NULL,?,NULL)");
+                $logDel->execute([$adminUID, $username, $delRowId, (int)$preRow['MobID'], $preRow['MobName'], (int)$preRow['ItemOrder'], (int)$preRow['Grade'], (int)$preRow['DropRate']]);
+            } catch (Throwable $e) {}
+
+            $msg = "Slot {$preRow['ItemOrder']} rimosso da MobID {$preRow['MobID']}" . ($preRow['MobName'] ? " ({$preRow['MobName']})" : '') . " — Grade {$preRow['Grade']} eliminato.";
+            $status = "success";
+            appAuditLog('admin_drops_delete_row', ['admin' => $username, 'row_id' => $delRowId, 'mob_id' => $preRow['MobID'], 'item_order' => $preRow['ItemOrder']]);
+        } catch (Throwable $e) {
+            $msg = "Errore DB durante DELETE slot drop."; $status = "error";
+        }
+        break;
+
     case 'drops_undo_row':
         if ($adminStatus != 16) { $msg = "Unauthorized."; $status = "error"; break; }
         $logId = isset($_POST['log_id']) ? (int) $_POST['log_id'] : 0;
@@ -2011,18 +2278,42 @@ switch ($action) {
             $undoFetch = $pdoAdmin->prepare("SELECT RowID, MobID, MobName, ItemOrder, OldGrade, OldDropRate, NewGrade, NewDropRate FROM PS_WebSite.dbo.Web_DropsEditLog WHERE LogID = ? AND AdminUID = ?");
             $undoFetch->execute([$logId, $adminUID]);
             $undoRow = $undoFetch->fetch(PDO::FETCH_ASSOC);
-            if (!$undoRow || $undoRow['OldGrade'] === null || $undoRow['OldDropRate'] === null) {
-                $msg = "Impossibile annullare: valori precedenti non disponibili.";
-                $status = "error";
-                break;
+            if (!$undoRow) { $msg = "Voce log non trovata."; $status = "error"; break; }
+
+            $oldGrade  = $undoRow['OldGrade']   === null ? null : (int)$undoRow['OldGrade'];
+            $oldDr     = $undoRow['OldDropRate'] === null ? null : (int)$undoRow['OldDropRate'];
+            $newGrade  = $undoRow['NewGrade']    === null ? null : (int)$undoRow['NewGrade'];
+            $undoMobId = (int)$undoRow['MobID'];
+            $undoOrd   = (int)$undoRow['ItemOrder'];
+            $undoRid   = (int)$undoRow['RowID'];
+            $undoName  = (string)$undoRow['MobName'];
+
+            if ($oldGrade === null && $oldDr === null) {
+                // Era un INSERT → undo = DELETE
+                $pdoAdmin->prepare("DELETE FROM PS_GameDefs.dbo.MobItems WHERE RowID=?")->execute([$undoRid]);
+                $msg = "UNDO INSERT: rimosso slot $undoOrd da MobID $undoMobId ($undoName).";
+            } elseif ($newGrade === null) {
+                // Era un DELETE → undo = re-INSERT
+                $chkFree = $pdoAdmin->prepare("SELECT COUNT(*) FROM PS_GameDefs.dbo.MobItems WHERE MobID=? AND ItemOrder=?");
+                $chkFree->execute([$undoMobId, $undoOrd]);
+                if ((int)$chkFree->fetchColumn() > 0) {
+                    $msg = "UNDO DELETE impossibile: slot $undoOrd già occupato su MobID $undoMobId.";
+                    $status = "error";
+                    break;
+                }
+                $reIns = $pdoAdmin->prepare("INSERT INTO PS_GameDefs.dbo.MobItems (MobID, ItemOrder, Grade, DropRate) VALUES (?,?,?,?)");
+                $reIns->execute([$undoMobId, $undoOrd, $oldGrade, $oldDr]);
+                $msg = "UNDO DELETE: slot $undoOrd ripristinato su MobID $undoMobId ($undoName) — Grade $oldGrade, DropRate $oldDr.";
+            } else {
+                // Era un UPDATE → undo = UPDATE back
+                $undoStmt = $pdoAdmin->prepare("UPDATE PS_GameDefs.dbo.MobItems SET Grade = ?, DropRate = ? WHERE RowID = ?");
+                $undoStmt->execute([$oldGrade, $oldDr, $undoRid]);
+                $msg = "UNDO UPDATE: MobID $undoMobId ($undoName) — Grade ripristinato a $oldGrade, DropRate a $oldDr.";
             }
-            $undoStmt = $pdoAdmin->prepare("UPDATE PS_GameDefs.dbo.MobItems SET Grade = ?, DropRate = ? WHERE RowID = ?");
-            $undoStmt->execute([$undoRow['OldGrade'], $undoRow['OldDropRate'], $undoRow['RowID']]);
-            // Rimuovi la voce dal log (annullata)
+
             $pdoAdmin->prepare("DELETE FROM PS_WebSite.dbo.Web_DropsEditLog WHERE LogID = ?")->execute([$logId]);
-            $msg = "UNDO MobID {$undoRow['MobID']} ({$undoRow['MobName']}) — Grade ripristinato a {$undoRow['OldGrade']}, DropRate a {$undoRow['OldDropRate']}.";
             $status = "success";
-            appAuditLog('admin_drops_undo', ['admin' => $username, 'log_id' => $logId, 'row_id' => $undoRow['RowID']]);
+            appAuditLog('admin_drops_undo', ['admin' => $username, 'log_id' => $logId, 'row_id' => $undoRid]);
         } catch (Throwable $e) {
             $msg = "Errore DB durante UNDO."; $status = "error";
         }
@@ -2499,9 +2790,15 @@ if ($returnView) {
     if ($returnView === 'DROPS_EDITOR') {
         if (!empty($_POST['drop_filter_mob_id']))   $redirect .= "&mob_id="   . (int) $_POST['drop_filter_mob_id'];
         if (!empty($_POST['drop_filter_mob_name']))  $redirect .= "&mob_name=" . urlencode((string) $_POST['drop_filter_mob_name']);
-        if (!empty($_POST['drop_filter_map_id']))   $redirect .= "&map_id="   . (int) $_POST['drop_filter_map_id'];
+        if (isset($_POST['drop_filter_map_id']) && $_POST['drop_filter_map_id'] !== '')
+            $redirect .= "&map_id=" . (int) $_POST['drop_filter_map_id'];
         if (!empty($_POST['drop_filter_page']) && (int) $_POST['drop_filter_page'] > 1)
             $redirect .= "&page=" . (int) $_POST['drop_filter_page'];
+        if (!empty($_POST['drop_filter_boss_only']))
+            $redirect .= "&boss_only=1";
+        // Auto-reopen modal dopo save
+        if (!empty($_POST['mc_open_mob_id']) && (int)$_POST['mc_open_mob_id'] > 0)
+            $redirect .= "&mc_open=" . (int)$_POST['mc_open_mob_id'];
     }
 }
 header("Location: $redirect");

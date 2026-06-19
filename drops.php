@@ -736,8 +736,8 @@ $_showDropsModal = (isset($_GET['itemid']) && (int)$_GET['itemid'] > 0)
                         </td>
                         <td>
                             <?php
-                            $DropRate = $drop['DropRate'];
-                            if ($drop['ItemOrder'] > 4) $DropRate = $DropRate / 100000;
+                            $DropRate = (float)$drop['DropRate'];
+                            if ((int)$drop['ItemOrder'] >= 7) $DropRate = $DropRate / 10000;
                             if ($DropRate > 100) $DropRate = 100;
                             echo '<span style="color:#a8d08d;">' . rtrim(rtrim(number_format($DropRate, 4), '0'), '.') . '%</span>';
                             ?>
@@ -797,8 +797,8 @@ $_showDropsModal = (isset($_GET['itemid']) && (int)$_GET['itemid'] > 0)
                         </td>
                         <td style="text-align:right;">
                             <?php
-                            $DropRate = $drop['DropRate'];
-                            if ($drop['ItemOrder'] > 4) $DropRate = $DropRate / 100000;
+                            $DropRate = (float)$drop['DropRate'];
+                            if ((int)$drop['ItemOrder'] >= 7) $DropRate = $DropRate / 10000;
                             if ($DropRate > 100) $DropRate = 100;
                             echo '<span style="color:#a8d08d;">' . rtrim(rtrim(number_format($DropRate, 4), '0'), '.') . '%</span>';
                             ?>

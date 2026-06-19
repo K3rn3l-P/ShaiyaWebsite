@@ -16,13 +16,25 @@ try {
                 AdminUID INT NOT NULL, AdminID VARCHAR(32) NOT NULL,
                 RowID INT NOT NULL, MobID INT NOT NULL, MobName NVARCHAR(100) NULL,
                 ItemOrder TINYINT NOT NULL,
-                OldGrade SMALLINT NULL, NewGrade SMALLINT NOT NULL,
-                OldDropRate INT NULL, NewDropRate INT NOT NULL,
+                OldGrade SMALLINT NULL, NewGrade SMALLINT NULL,
+                OldDropRate INT NULL, NewDropRate INT NULL,
                 ChangedAt DATETIME NOT NULL DEFAULT GETDATE()
             );
             CREATE INDEX IX_Web_DropsEditLog_AdminUID ON PS_WebSite.dbo.Web_DropsEditLog(AdminUID, ChangedAt DESC);
         END
     ");
+    // Migrazione: rende nullable NewGrade/NewDropRate se la tabella esisteva con NOT NULL
+    try {
+        $pdoAdmin->exec("
+            IF EXISTS (SELECT * FROM PS_WebSite.sys.objects WHERE object_id = OBJECT_ID(N'PS_WebSite.dbo.Web_DropsEditLog') AND type = N'U')
+            BEGIN
+                IF EXISTS (SELECT 1 FROM PS_WebSite.sys.columns c JOIN PS_WebSite.sys.objects o ON o.object_id=c.object_id WHERE o.name='Web_DropsEditLog' AND c.name='NewGrade' AND c.is_nullable=0)
+                    ALTER TABLE PS_WebSite.dbo.Web_DropsEditLog ALTER COLUMN NewGrade SMALLINT NULL;
+                IF EXISTS (SELECT 1 FROM PS_WebSite.sys.columns c JOIN PS_WebSite.sys.objects o ON o.object_id=c.object_id WHERE o.name='Web_DropsEditLog' AND c.name='NewDropRate' AND c.is_nullable=0)
+                    ALTER TABLE PS_WebSite.dbo.Web_DropsEditLog ALTER COLUMN NewDropRate INT NULL;
+            END
+        ");
+    } catch (Throwable $e) {}
     $pdoAdmin->prepare("DELETE FROM PS_WebSite.dbo.Web_DropsEditLog WHERE ChangedAt < DATEADD(hour, -24, GETDATE())")->execute();
     $clStmt = $pdoAdmin->prepare("
         SELECT TOP 200
@@ -42,9 +54,10 @@ try {
 // --- Filtri GET ---
 $filterMobId   = isset($_GET['mob_id'])   && ctype_digit((string) $_GET['mob_id'])   ? (int) $_GET['mob_id']   : 0;
 $filterMobName = isset($_GET['mob_name']) ? trim((string) $_GET['mob_name'])          : '';
-$filterMapId   = isset($_GET['map_id'])   && ctype_digit((string) $_GET['map_id'])   ? (int) $_GET['map_id']   : 0;
+$filterMapId   = isset($_GET['map_id'])   && ctype_digit((string) $_GET['map_id'])   ? (int) $_GET['map_id']   : null;
 $filterPage    = isset($_GET['page'])     && ctype_digit((string) $_GET['page'])      ? max(1, (int) $_GET['page']) : 1;
-$hasFilter     = $filterMobId > 0 || $filterMobName !== '' || $filterMapId > 0;
+$filterBossOnly = isset($_GET['boss_only']) && $_GET['boss_only'] === '1';
+$hasFilter     = $filterMobId > 0 || $filterMobName !== '' || $filterMapId !== null || $filterBossOnly;
 
 // --- Dropdown mappe ---
 $mapOptions = [];
@@ -85,18 +98,38 @@ if ($filterMapId > 0) {
     if ($currentMapName === '') $currentMapName = 'Map ' . $filterMapId;
 }
 
-// --- Query principale ---
+// --- Query mob-list (sempre aggregata per mob) ---
 $rows = []; $totalRows = 0;
+
+// mob_id apre il modale automaticamente (via JS), non la vista inline
+$mcAutoOpen = (int)($_GET['mc_open'] ?? 0);
+if ($mcAutoOpen === 0 && $filterMobId > 0) $mcAutoOpen = $filterMobId;
+
+// Carica boss MobIDs (query separata su PS_WebSite — nessun cross-DB nel GROUP BY)
+$bossMobIds = [];
+try {
+    $bStmt = $pdoAdmin->query("SELECT MobID FROM PS_WebSite.dbo.Web_Bosses WHERE IsActive = 1");
+    if ($bStmt) $bossMobIds = array_flip(array_column($bStmt->fetchAll(PDO::FETCH_ASSOC), 'MobID'));
+} catch (Throwable $e) {}
+
 if ($hasFilter) {
-    $where = "WHERE 1=1"; $params = [];
-    if ($filterMobId > 0)   { $where .= " AND mi.MobID = ?";      $params[] = $filterMobId; }
-    if ($filterMobName !== ''){ $where .= " AND m.MobName LIKE ?"; $params[] = '%' . $filterMobName . '%'; }
-    if ($filterMapId > 0)   { $where .= " AND m.MapID = ?";       $params[] = $filterMapId; }
+    // ── Mob-list: COUNT + DATA aggregati per mob ─────────────────
+    $where = "WHERE m.Level > 0"; $params = [];
+    if ($filterMobId > 0)     { $where .= " AND m.MobID = ?";      $params[] = $filterMobId; }
+    if ($filterMobName !== '') { $where .= " AND m.MobName LIKE ?"; $params[] = '%' . $filterMobName . '%'; }
+    if ($filterMapId !== null) { $where .= " AND m.MapID = ?";      $params[] = $filterMapId; }
+    if ($filterBossOnly && !empty($bossMobIds)) {
+        $bIds = implode(',', array_map('intval', array_keys($bossMobIds)));
+        $where .= " AND m.MobID IN ($bIds)";
+    } elseif ($filterBossOnly) {
+        // Nessun boss registrato → risultato vuoto forzato
+        $where .= " AND 1=0";
+    }
 
     try {
-        $cntStmt = $pdoAdmin->prepare("SELECT COUNT(*) AS Total FROM PS_GameDefs.dbo.MobItems mi JOIN PS_GameDefs.dbo.Mobs m ON m.MobID = mi.MobID $where");
+        $cntStmt = $pdoAdmin->prepare("SELECT COUNT(*) FROM PS_GameDefs.dbo.Mobs m $where");
         $cntStmt->execute($params);
-        $totalRows = (int) ($cntStmt->fetchColumn() ?? 0);
+        $totalRows = (int)($cntStmt->fetchColumn() ?? 0);
     } catch (Throwable $e) {}
 
     $totalPages = max(1, (int) ceil($totalRows / $PER_PAGE));
@@ -104,7 +137,19 @@ if ($hasFilter) {
     $offset     = ($filterPage - 1) * $PER_PAGE;
 
     try {
-        $dataStmt = $pdoAdmin->prepare("SELECT mi.RowID, mi.MobID, m.MobName, mi.ItemOrder, mi.Grade, mi.DropRate FROM PS_GameDefs.dbo.MobItems mi JOIN PS_GameDefs.dbo.Mobs m ON m.MobID = mi.MobID $where ORDER BY mi.MobID ASC, mi.ItemOrder ASC OFFSET $offset ROWS FETCH NEXT $PER_PAGE ROWS ONLY");
+        $dataStmt = $pdoAdmin->prepare("
+            SELECT m.MobID, m.MobName, m.Level, m.MapID, mn.MapName,
+                SUM(CASE WHEN mi.Grade > 0 THEN 1 ELSE 0 END) AS FilledSlots,
+                SUM(CASE WHEN mi.ItemOrder BETWEEN 1 AND 6 AND mi.Grade > 0
+                    THEN CAST(mi.DropRate AS FLOAT) ELSE 0 END) AS TotalPct16
+            FROM PS_GameDefs.dbo.Mobs m
+            LEFT JOIN PS_GameDefs.dbo.MapNames mn ON mn.MapID = m.MapID
+            LEFT JOIN PS_GameDefs.dbo.MobItems mi ON mi.MobID = m.MobID
+            $where
+            GROUP BY m.MobID, m.MobName, m.Level, m.MapID, mn.MapName
+            ORDER BY m.MobID ASC
+            OFFSET $offset ROWS FETCH NEXT $PER_PAGE ROWS ONLY
+        ");
         $dataStmt->execute($params);
         $rows = $dataStmt->fetchAll(PDO::FETCH_ASSOC);
     } catch (Throwable $e) {}
@@ -112,14 +157,35 @@ if ($hasFilter) {
     $totalPages = 1;
 }
 
+// Batch query slot details per tooltip hover (tutti i mob della pagina corrente)
+$slotsByMob = [];
+if (!empty($rows)) {
+    $pageIds = array_map('intval', array_column($rows, 'MobID'));
+    $inList  = implode(',', $pageIds);
+    try {
+        $slotStmt = $pdoAdmin->query("
+            SELECT mi.MobID, mi.ItemOrder, mi.Grade, mi.DropRate, i.ItemName
+            FROM PS_GameDefs.dbo.MobItems mi
+            OUTER APPLY (SELECT TOP 1 ItemName FROM PS_GameDefs.dbo.Items WHERE Grade = mi.Grade) i
+            WHERE mi.MobID IN ($inList) AND mi.Grade > 0
+            ORDER BY mi.MobID ASC, mi.ItemOrder ASC
+        ");
+        if ($slotStmt) {
+            foreach ($slotStmt->fetchAll(PDO::FETCH_ASSOC) as $sr) {
+                $slotsByMob[(int)$sr['MobID']][] = $sr;
+            }
+        }
+    } catch (Throwable $e) {}
+}
+
 // Querystring base per redirect post-save
-$filterQs = http_build_query(array_filter([
-    'view'     => 'DROPS_EDITOR',
-    'mob_id'   => $filterMobId   ?: null,
-    'mob_name' => $filterMobName ?: null,
-    'map_id'   => $filterMapId   ?: null,
-    'page'     => $filterPage > 1 ? $filterPage : null,
-]));
+$_qsArr = ['view' => 'DROPS_EDITOR'];
+if ($filterMobId > 0)      $_qsArr['mob_id']    = $filterMobId;
+if ($filterMobName !== '')  $_qsArr['mob_name']  = $filterMobName;
+if ($filterMapId !== null)  $_qsArr['map_id']    = $filterMapId;
+if ($filterBossOnly)        $_qsArr['boss_only'] = '1';
+if ($filterPage > 1)        $_qsArr['page']      = $filterPage;
+$filterQs = http_build_query($_qsArr);
 ?>
 
 <style>
@@ -268,6 +334,168 @@ $filterQs = http_build_query(array_filter([
     background: rgba(232,200,129,0.12) !important;
     transition: background 1.6s ease;
 }
+
+/* ── Mob-centric view ───────────────────────────────────────── */
+.mc-header {
+    background: rgba(232,200,129,0.05);
+    border: 1px solid rgba(232,200,129,0.12);
+    border-radius: 10px;
+    padding: 18px 24px;
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+.mc-mob-name { color: #e8c881; font-size: 18px; font-weight: 600; }
+.mc-mob-meta { color: #555; font-size: 12px; margin-top: 4px; }
+.mc-mob-attrib { display: inline-flex; align-items: center; gap: 4px; }
+.mc-slot-table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+.mc-slot-table th {
+    color: #555; font-size: 11px; text-transform: uppercase; letter-spacing: 1px;
+    padding: 10px 14px; border-bottom: 1px solid rgba(255,255,255,0.05);
+    text-align: left; font-weight: 400;
+}
+.mc-slot-table td { padding: 10px 14px; border-bottom: 1px solid rgba(255,255,255,0.03); vertical-align: middle; }
+.mc-slot-table tr:last-child td { border-bottom: none; }
+.mc-slot-table tr.mc-row-filled:hover td { background: rgba(255,255,255,0.02); }
+.mc-slot-table tr.mc-row-empty td { opacity: 0.4; }
+.mc-slot-num { color: #444; font-size: 12px; font-weight: 600; text-align: center; }
+.mc-slot-num.mc-slot-high { color: #3498db; }
+.mc-item-name { color: #ccc; font-size: 13px; }
+.mc-item-grade { color: #555; font-size: 11px; margin-left: 6px; }
+.mc-item-level { color: #444; font-size: 11px; margin-left: 4px; }
+.mc-rate-wrap { display: flex; align-items: center; gap: 8px; }
+.mc-rate-input {
+    width: 110px; background: rgba(0,0,0,0.4); border: 1px solid #2a2a2a;
+    color: #3498db; text-align: center; border-radius: 4px;
+    padding: 5px 6px; font-size: 13px; height: 32px;
+}
+.mc-rate-input.mc-rate-high { border-color: rgba(52,152,219,0.3); }
+.mc-pct-display { color: #555; font-size: 12px; min-width: 70px; }
+.mc-btn-save {
+    background: rgba(72,187,120,0.1); border: 1px solid rgba(72,187,120,0.25);
+    color: #48bb78; border-radius: 4px; padding: 5px 14px; font-size: 11px;
+    cursor: pointer; height: 32px; text-transform: uppercase; letter-spacing: 1px;
+}
+.mc-btn-save:hover { background: rgba(72,187,120,0.2); }
+.mc-btn-remove {
+    background: rgba(231,76,60,0.08); border: 1px solid rgba(231,76,60,0.2);
+    color: #e74c3c; border-radius: 4px; padding: 5px 10px; font-size: 13px;
+    cursor: pointer; height: 32px; line-height: 1;
+}
+.mc-btn-remove:hover { background: rgba(231,76,60,0.18); }
+.mc-btn-add {
+    background: rgba(52,152,219,0.08); border: 1px dashed rgba(52,152,219,0.25);
+    color: #3498db; border-radius: 4px; padding: 6px 18px; font-size: 12px;
+    cursor: pointer; letter-spacing: 0.5px;
+}
+.mc-btn-add:hover { background: rgba(52,152,219,0.15); border-style: solid; }
+.mc-btn-help {
+    background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1);
+    color: #888; border-radius: 6px; padding: 7px 16px; font-size: 12px;
+    cursor: pointer; letter-spacing: 0.5px; display: flex; align-items: center; gap: 8px;
+}
+.mc-btn-help:hover { background: rgba(255,255,255,0.08); color: #aaa; }
+.mc-slot-type-badge {
+    font-size: 10px; color: #3498db; background: rgba(52,152,219,0.1);
+    border: 1px solid rgba(52,152,219,0.2); border-radius: 3px;
+    padding: 1px 5px; margin-left: 6px; vertical-align: middle;
+}
+/* ── Slot hover tooltip trigger ─────────────────────────── */
+.slot-tip-trigger { cursor: help; border-bottom: 1px dotted rgba(72,187,120,0.5); }
+/* Boss row in mob-list */
+.mob-row-boss {
+    background: rgba(232,200,129,0.06) !important;
+    border-left: 3px solid rgba(232,200,129,0.45) !important;
+}
+.mob-boss-crown {
+    color: #e8c881; font-size: 10px; margin-right: 5px; vertical-align: middle; opacity: 0.85;
+}
+.mob-boss-badge {
+    display: inline-block; font-size: 9px; color: #e8c881;
+    background: rgba(232,200,129,0.1); border: 1px solid rgba(232,200,129,0.2);
+    border-radius: 3px; padding: 1px 6px; margin-left: 6px; vertical-align: middle;
+    text-transform: uppercase; letter-spacing: 0.5px;
+}
+/* Boss filter active */
+.boss-filter-btn { display: flex; align-items: center; gap: 6px; height: 38px; padding: 0 14px;
+    border-radius: 4px; font-size: 12px; text-transform: uppercase; letter-spacing: 1px;
+    white-space: nowrap; cursor: pointer; text-decoration: none; border: 1px solid rgba(255,255,255,0.1);
+    background: rgba(255,255,255,0.04); color: #555; transition: background 0.15s, color 0.15s; }
+.boss-filter-btn:hover { background: rgba(232,200,129,0.08); color: #999; }
+.boss-filter-btn.active { background: rgba(232,200,129,0.12); border-color: rgba(232,200,129,0.35); color: #e8c881; }
+/* Modal generici */
+.dr-modal-overlay {
+    display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    z-index: 9998; background: rgba(0,0,0,0.75); backdrop-filter: blur(4px);
+    align-items: center; justify-content: center;
+}
+.dr-modal-overlay.active { display: flex; }
+.dr-modal-box {
+    background: #111; border: 1px solid rgba(232,200,129,0.2);
+    border-radius: 12px; width: 560px; max-width: 96vw;
+    max-height: calc(100vh - 40px); display: flex; flex-direction: column;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.85);
+}
+.dr-modal-header {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 18px 24px; border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+.dr-modal-body { overflow-y: auto; flex: 1; padding: 20px 24px; }
+.dr-modal-close {
+    background: none; border: none; color: #555; font-size: 20px;
+    cursor: pointer; padding: 4px 8px; line-height: 1;
+}
+.dr-modal-close:hover { color: #aaa; }
+/* Search results in add-item modal */
+.ai-search-input {
+    width: 100%; background: rgba(0,0,0,0.4); border: 1px solid #333;
+    color: #fff; border-radius: 6px; padding: 10px 14px; font-size: 14px;
+    box-sizing: border-box; margin-bottom: 12px;
+}
+.ai-search-input:focus { outline: none; border-color: rgba(52,152,219,0.5); }
+.ai-results { border: 1px solid rgba(255,255,255,0.06); border-radius: 6px; overflow: hidden; min-height: 40px; }
+.ai-result-item {
+    padding: 10px 14px; cursor: pointer; border-bottom: 1px solid rgba(255,255,255,0.04);
+    display: flex; align-items: center; justify-content: space-between;
+}
+.ai-result-item:last-child { border-bottom: none; }
+.ai-result-item:hover { background: rgba(52,152,219,0.08); }
+.ai-result-item.selected { background: rgba(52,152,219,0.15); border-left: 2px solid #3498db; }
+.ai-result-name { color: #ccc; font-size: 13px; }
+.ai-result-meta { color: #555; font-size: 11px; }
+.ai-no-results { padding: 20px; text-align: center; color: #444; font-size: 13px; }
+.ai-selected-banner {
+    background: rgba(52,152,219,0.08); border: 1px solid rgba(52,152,219,0.2);
+    border-radius: 6px; padding: 10px 14px; margin-bottom: 14px;
+    color: #3498db; font-size: 13px; display: none;
+}
+.ai-selected-banner.visible { display: block; }
+.ai-rate-row { display: flex; align-items: center; gap: 12px; margin-top: 16px; }
+.ai-rate-label { color: #888; font-size: 12px; text-transform: uppercase; letter-spacing: 1px; white-space: nowrap; }
+.ai-rate-input {
+    flex: 1; background: rgba(0,0,0,0.4); border: 1px solid #333;
+    color: #3498db; border-radius: 6px; padding: 8px 12px; font-size: 14px; text-align: center;
+}
+.ai-rate-pct { color: #555; font-size: 13px; white-space: nowrap; min-width: 70px; }
+.ai-save-btn {
+    width: 100%; margin-top: 16px; padding: 11px; background: rgba(72,187,120,0.12);
+    border: 1px solid rgba(72,187,120,0.3); color: #48bb78; border-radius: 6px;
+    font-size: 13px; cursor: pointer; text-transform: uppercase; letter-spacing: 1px;
+}
+.ai-save-btn:hover { background: rgba(72,187,120,0.22); }
+.ai-save-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+/* Help modal */
+.help-table { width: 100%; border-collapse: collapse; margin: 12px 0; }
+.help-table th { color: #888; font-size: 11px; text-transform: uppercase; padding: 8px 12px; border-bottom: 1px solid rgba(255,255,255,0.07); text-align: left; font-weight: 400; }
+.help-table td { color: #bbb; font-size: 13px; padding: 8px 12px; border-bottom: 1px solid rgba(255,255,255,0.04); vertical-align: top; }
+.help-table tr:last-child td { border-bottom: none; }
+.help-code { background: rgba(255,255,255,0.05); border-radius: 3px; padding: 1px 5px; color: #e8c881; font-family: monospace; font-size: 12px; }
+.help-step { display: flex; gap: 10px; margin-bottom: 8px; }
+.help-step-num { color: #e8c881; font-weight: 700; min-width: 18px; }
+.help-section-title { color: #e8c881; font-size: 13px; font-weight: 600; margin: 18px 0 8px; text-transform: uppercase; letter-spacing: 1px; }
 </style>
 
 <!-- ============================================================
@@ -282,11 +510,16 @@ $filterQs = http_build_query(array_filter([
                 <i class="fas fa-dragon" style="margin-right: 10px; opacity: 0.8;"></i>Drops Editor
             </h2>
             <p style="color: #555; font-size: 13px; margin: 0;">
-                Edit Grade and DropRate in <code style="color:#777;">PS_GameDefs.dbo.MobItems</code> — DropRate% = raw / 100000.
+                Edit Grade and DropRate in <code style="color:#777;">PS_GameDefs.dbo.MobItems</code> — Slot 1-6: DropRate% = raw value (0-100). Slot 7-9: DropRate% = raw / 10000 (0-1000000).
             </p>
         </div>
-        <!-- Indicatore stato sessione (aggiornato da JS keep-alive) -->
-        <span id="ka-status" style="font-size:11px; color:#333; margin-top:4px; transition:color 0.4s;"></span>
+        <div style="display:flex; align-items:center; gap:10px;">
+            <!-- Indicatore stato sessione (aggiornato da JS keep-alive) -->
+            <span id="ka-status" style="font-size:11px; color:#333; transition:color 0.4s;"></span>
+            <button class="mc-btn-help" id="btn-drop-help" style="white-space:nowrap;">
+                <i class="fas fa-question-circle"></i> HELP
+            </button>
+        </div>
     </div>
 
     <!-- Filtri -->
@@ -313,6 +546,17 @@ $filterQs = http_build_query(array_filter([
                 </select>
             </div>
             <button type="submit" class="btn-action" style="height: 38px; padding: 0 24px; white-space: nowrap;"><i class="fas fa-search" style="margin-right: 8px;"></i>SEARCH</button>
+            <?php
+            // Boss toggle link (preserva altri filtri, cambia solo boss_only)
+            $_bossToggle = $_qsArr;
+            unset($_bossToggle['page']); // reset pagina
+            if ($filterBossOnly) unset($_bossToggle['boss_only']);
+            else $_bossToggle['boss_only'] = '1';
+            ?>
+            <a href="/admin?<?php echo htmlspecialchars(http_build_query($_bossToggle)); ?>"
+               class="boss-filter-btn<?php echo $filterBossOnly ? ' active' : ''; ?>">
+                <i class="fas fa-crown"></i> Boss
+            </a>
             <?php if ($hasFilter): ?>
             <a href="/admin?view=drops_editor" class="btn-action" style="height: 38px; padding: 0 18px; background: rgba(255,255,255,0.04); border-color: rgba(255,255,255,0.1); color: #888; display: flex; align-items: center; text-decoration: none;"><i class="fas fa-times" style="margin-right: 6px;"></i>Reset</a>
             <?php endif; ?>
@@ -332,68 +576,87 @@ $filterQs = http_build_query(array_filter([
     </div>
 
     <?php else: ?>
-    <!-- Tabella risultati -->
+    <!-- ── Mob List (aggregata per mob) ──────────────────────── -->
     <div style="background: rgba(0,0,0,0.2); border: 1px solid rgba(232,200,129,0.05); border-radius: 8px; overflow: hidden; margin-bottom: 28px;">
-        <div style="display: grid; grid-template-columns: 80px 1fr 80px 120px 130px 100px 90px; gap: 0; padding: 12px 16px; background: rgba(232,200,129,0.04); border-bottom: 1px solid rgba(255,255,255,0.05);">
-            <span style="color: #666; font-size: 11px; text-transform: uppercase; letter-spacing: 1px;">MobID</span>
-            <span style="color: #666; font-size: 11px; text-transform: uppercase; letter-spacing: 1px;">Mob Name</span>
-            <span style="color: #666; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; text-align:center;">Order</span>
-            <span style="color: #666; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; text-align:center;">Grade</span>
-            <span style="color: #666; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; text-align:center;">DropRate (raw)</span>
-            <span style="color: #666; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; text-align:center;">%</span>
-            <span style="color: #666; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; text-align:center;">Azione</span>
+        <!-- Header colonne -->
+        <div style="display: grid; grid-template-columns: 72px 1fr 46px 1fr 78px 90px 80px; gap: 0; padding: 10px 16px; background: rgba(232,200,129,0.04); border-bottom: 1px solid rgba(255,255,255,0.05);">
+            <span style="color: #555; font-size: 11px; text-transform: uppercase; letter-spacing: 1px;">MobID</span>
+            <span style="color: #555; font-size: 11px; text-transform: uppercase; letter-spacing: 1px;">Nome</span>
+            <span style="color: #555; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; text-align:center;">Lv</span>
+            <span style="color: #555; font-size: 11px; text-transform: uppercase; letter-spacing: 1px;">Mappa</span>
+            <span style="color: #555; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; text-align:center;">Slot</span>
+            <span style="color: #555; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; text-align:center;">Drop% 1-6</span>
+            <span style="color: #555; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; text-align:center;">Azione</span>
         </div>
 
         <?php foreach ($rows as $i => $row):
-            $dropPct = round((int) $row['DropRate'] / 100000, 4);
-            $rowBg = $i % 2 === 0 ? 'rgba(255,255,255,0.01)' : 'rgba(0,0,0,0.15)';
+            $mlFilled = (int)($row['FilledSlots'] ?? 0);
+            $mlPct    = round((float)($row['TotalPct16'] ?? 0), 2);
+            $mlIsBoss = isset($bossMobIds[(int)$row['MobID']]);
+            $mlBg     = $mlIsBoss ? '' : ($i % 2 === 0 ? 'rgba(255,255,255,0.01)' : 'rgba(0,0,0,0.15)');
+            $mlClass  = $mlIsBoss ? ' class="mob-row-boss"' : '';
+            // link EDIT: mob_id + filtri attuali
+            $mlEditPs = ['view' => 'DROPS_EDITOR', 'mob_id' => (int)$row['MobID']];
+            if ($filterMapId !== null)  $mlEditPs['map_id']    = $filterMapId;
+            if ($filterMobName !== '')  $mlEditPs['mob_name']  = $filterMobName;
+            if ($filterBossOnly)        $mlEditPs['boss_only'] = '1';
+            if ($filterPage > 1)        $mlEditPs['page']      = $filterPage;
+            $mlEditUrl = '/admin?' . http_build_query($mlEditPs);
         ?>
-        <form id="row-<?php echo (int) $row['RowID']; ?>" method="POST" action="/admin_actions"
-            style="display: grid; grid-template-columns: 80px 1fr 80px 120px 130px 100px 90px; gap: 0; padding: 10px 16px; background: <?php echo $rowBg; ?>; border-bottom: 1px solid rgba(255,255,255,0.03); align-items: center; transition: background 1.6s ease;">
-            <input type="hidden" name="action"                value="drops_update_row">
-            <input type="hidden" name="row_id"                value="<?php echo (int) $row['RowID']; ?>">
-            <input type="hidden" name="csrf_token"            value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>">
-            <input type="hidden" name="return_view"           value="DROPS_EDITOR">
-            <input type="hidden" name="drop_filter_mob_id"    value="<?php echo $filterMobId; ?>">
-            <input type="hidden" name="drop_filter_mob_name"  value="<?php echo htmlspecialchars($filterMobName); ?>">
-            <input type="hidden" name="drop_filter_map_id"    value="<?php echo $filterMapId; ?>">
-            <input type="hidden" name="drop_filter_page"      value="<?php echo $filterPage; ?>">
-
-            <span style="color: #aaa; font-size: 13px;"><?php echo (int) $row['MobID']; ?></span>
-            <span style="color: #ccc; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="<?php echo htmlspecialchars((string) $row['MobName']); ?>"><?php echo htmlspecialchars((string) $row['MobName']); ?></span>
-            <span style="color: #777; font-size: 13px; text-align: center;"><?php echo (int) $row['ItemOrder']; ?></span>
+        <div<?php echo $mlClass; ?> style="display: grid; grid-template-columns: 72px 1fr 46px 1fr 78px 90px 80px; gap: 0; padding: 9px 16px; <?php echo $mlBg ? 'background:' . $mlBg . ';' : ''; ?> border-bottom: 1px solid rgba(255,255,255,0.03); align-items: center;">
+            <span style="color: #666; font-size: 12px;"><?php echo (int)$row['MobID']; ?></span>
+            <span style="color: <?php echo $mlIsBoss ? '#e8c881' : '#ccc'; ?>; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="<?php echo htmlspecialchars((string)$row['MobName']); ?>">
+                <?php if ($mlIsBoss): ?><i class="fas fa-crown mob-boss-crown"></i><?php endif; ?>
+                <?php echo htmlspecialchars((string)$row['MobName']); ?>
+                <?php if ($mlIsBoss): ?><span class="mob-boss-badge">Boss</span><?php endif; ?>
+            </span>
+            <span style="color: #666; font-size: 12px; text-align: center;"><?php echo (int)($row['Level'] ?? 0); ?></span>
+            <span style="color: #555; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"><?php echo htmlspecialchars((string)($row['MapName'] ?? '')); ?></span>
+            <span style="font-size: 12px; text-align: center; color: <?php echo $mlFilled > 0 ? '#48bb78' : '#444'; ?>;">
+                <?php
+                $mobSlots = $slotsByMob[(int)$row['MobID']] ?? [];
+                if ($mlFilled > 0 && !empty($mobSlots)):
+                    $slotJson = htmlspecialchars(json_encode(array_values(array_map(function($sl) {
+                        $hi  = (int)$sl['ItemOrder'] >= 7;
+                        $pct = $hi ? round((float)$sl['DropRate'] / 10000, 4) : (float)$sl['DropRate'];
+                        return ['name' => (string)($sl['ItemName'] ?? '???'), 'raw' => (int)$sl['DropRate'], 'pct' => $pct, 'grade' => (int)$sl['Grade'], 'hi' => $hi];
+                    }, $mobSlots))), ENT_QUOTES);
+                ?>
+                <span class="slot-tip-trigger" data-slots="<?php echo $slotJson; ?>"><?php echo $mlFilled; ?>/9</span>
+                <?php else: ?>
+                <?php echo $mlFilled; ?>/9
+                <?php endif; ?>
+            </span>
+            <span style="font-size: 12px; text-align: center; color: <?php echo $mlPct > 0 ? '#3498db' : '#444'; ?>;">
+                <?php echo $mlPct > 0 ? $mlPct . '%' : '—'; ?>
+            </span>
             <div style="text-align: center;">
-                <input type="number" name="grade" value="<?php echo (int) $row['Grade']; ?>" min="0"
-                    class="dr-grade"
-                    style="width: 90px; background: rgba(0,0,0,0.4); border: 1px solid #2a2a2a; color: #e8c881; text-align: center; border-radius: 4px; padding: 5px 4px; font-size: 13px; height: 32px;">
+                <a href="<?php echo htmlspecialchars($mlEditUrl); ?>"
+                   data-mob-id="<?php echo (int)$row['MobID']; ?>"
+                   class="mc-edit-link"
+                   style="display: inline-block; background: rgba(232,200,129,0.08); border: 1px solid rgba(232,200,129,0.2); color: #e8c881; border-radius: 4px; padding: 4px 12px; font-size: 11px; text-decoration: none; text-transform: uppercase; letter-spacing: 1px; transition: background 0.15s;"
+                   onmouseover="this.style.background='rgba(232,200,129,0.18)'" onmouseout="this.style.background='rgba(232,200,129,0.08)'">
+                    EDIT
+                </a>
             </div>
-            <div style="text-align: center;">
-                <input type="number" name="drop_rate" value="<?php echo (int) $row['DropRate']; ?>" min="0"
-                    class="drop-rate-input"
-                    style="width: 110px; background: rgba(0,0,0,0.4); border: 1px solid #2a2a2a; color: #3498db; text-align: center; border-radius: 4px; padding: 5px 4px; font-size: 13px; height: 32px;">
-            </div>
-            <span class="pct-display" style="color: #555; font-size: 12px; text-align: center;"><?php echo $dropPct; ?>%</span>
-            <div style="text-align: center;">
-                <button type="submit" title="Save changes"
-                    style="background: rgba(72,187,120,0.1); border: 1px solid rgba(72,187,120,0.25); color: #48bb78; border-radius: 4px; padding: 5px 14px; font-size: 11px; cursor: pointer; height: 32px; text-transform: uppercase; letter-spacing: 1px; white-space: nowrap;">
-                    SAVE
-                </button>
-            </div>
-        </form>
+        </div>
         <?php endforeach; ?>
     </div>
 
-    <!-- Paginazione -->
+    <!-- Paginazione mob -->
     <?php if ($totalPages > 1):
-        $baseParams = array_filter(['view' => 'drops_editor', 'mob_id' => $filterMobId ?: null, 'mob_name' => $filterMobName ?: null, 'map_id' => $filterMapId ?: null]);
+        $baseParams = ['view' => 'DROPS_EDITOR'];
+        if ($filterMobName !== '')  $baseParams['mob_name']  = $filterMobName;
+        if ($filterMapId !== null)  $baseParams['map_id']    = $filterMapId;
+        if ($filterBossOnly)        $baseParams['boss_only'] = '1';
     ?>
     <div style="display: flex; gap: 8px; align-items: center; justify-content: center; margin-bottom: 30px;">
         <?php if ($filterPage > 1): ?>
-        <a href="/admin?<?php echo http_build_query($baseParams + ['page' => $filterPage - 1]); ?>" style="padding: 7px 16px; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); color: #888; border-radius: 4px; text-decoration: none; font-size: 13px;">&laquo; Prev</a>
+        <a href="/admin?<?php echo http_build_query($baseParams + ['page' => $filterPage - 1]); ?>" style="padding: 7px 16px; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); color: #888; border-radius: 4px; text-decoration: none; font-size: 13px;">&laquo; Prec</a>
         <?php endif; ?>
-        <span style="color: #666; font-size: 13px;">Pagina <?php echo $filterPage; ?> di <?php echo $totalPages; ?> — <?php echo $totalRows; ?> righe</span>
+        <span style="color: #666; font-size: 13px;">Pagina <?php echo $filterPage; ?> di <?php echo $totalPages; ?> — <?php echo $totalRows; ?> mob</span>
         <?php if ($filterPage < $totalPages): ?>
-        <a href="/admin?<?php echo http_build_query($baseParams + ['page' => $filterPage + 1]); ?>" style="padding: 7px 16px; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); color: #888; border-radius: 4px; text-decoration: none; font-size: 13px;">Next &raquo;</a>
+        <a href="/admin?<?php echo http_build_query($baseParams + ['page' => $filterPage + 1]); ?>" style="padding: 7px 16px; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); color: #888; border-radius: 4px; text-decoration: none; font-size: 13px;">Succ &raquo;</a>
         <?php endif; ?>
     </div>
     <?php endif; ?>
@@ -519,7 +782,8 @@ $filterQs = http_build_query(array_filter([
                             <th style="text-align:left; padding:6px 10px; color:#444; font-size:10px; text-transform:uppercase; letter-spacing:1px; font-weight:400; border-bottom:1px solid rgba(255,255,255,0.04);">Time</th>
                             <th style="text-align:left; padding:6px 10px; color:#444; font-size:10px; text-transform:uppercase; letter-spacing:1px; font-weight:400; border-bottom:1px solid rgba(255,255,255,0.04);">MobID</th>
                             <th style="text-align:left; padding:6px 10px; color:#444; font-size:10px; text-transform:uppercase; letter-spacing:1px; font-weight:400; border-bottom:1px solid rgba(255,255,255,0.04);">Mob Name</th>
-                            <th style="text-align:center; padding:6px 10px; color:#444; font-size:10px; text-transform:uppercase; letter-spacing:1px; font-weight:400; border-bottom:1px solid rgba(255,255,255,0.04);">Order</th>
+                            <th style="text-align:center; padding:6px 10px; color:#444; font-size:10px; text-transform:uppercase; letter-spacing:1px; font-weight:400; border-bottom:1px solid rgba(255,255,255,0.04);">Slot</th>
+                            <th style="text-align:center; padding:6px 10px; color:#444; font-size:10px; text-transform:uppercase; letter-spacing:1px; font-weight:400; border-bottom:1px solid rgba(255,255,255,0.04);">Op</th>
                             <th style="text-align:center; padding:6px 10px; color:#444; font-size:10px; text-transform:uppercase; letter-spacing:1px; font-weight:400; border-bottom:1px solid rgba(255,255,255,0.04);">Grade</th>
                             <th style="text-align:center; padding:6px 10px; color:#444; font-size:10px; text-transform:uppercase; letter-spacing:1px; font-weight:400; border-bottom:1px solid rgba(255,255,255,0.04);">DropRate</th>
                             <th style="border-bottom:1px solid rgba(255,255,255,0.04);"></th>
@@ -528,10 +792,17 @@ $filterQs = http_build_query(array_filter([
                     <tbody>
                     <?php foreach ($gEntries as $cl):
                         $changedTime  = date('H:i:s', strtotime($cl['ChangedAt']));
-                        $gradeChanged = $cl['OldGrade'] !== null && (int)$cl['OldGrade'] !== (int)$cl['NewGrade'];
-                        $drChanged    = $cl['OldDropRate'] !== null && (int)$cl['OldDropRate'] !== (int)$cl['NewDropRate'];
-                        $canUndo      = $cl['OldGrade'] !== null && $cl['OldDropRate'] !== null;
-                        $navUrl       = '/admin?view=drops_editor&mob_id=' . (int)$cl['MobID'];
+                        $clOldGrd = $cl['OldGrade']    === null ? null : (int)$cl['OldGrade'];
+                        $clNewGrd = $cl['NewGrade']    === null ? null : (int)$cl['NewGrade'];
+                        $clOldDr  = $cl['OldDropRate'] === null ? null : (int)$cl['OldDropRate'];
+                        $clNewDr  = $cl['NewDropRate'] === null ? null : (int)$cl['NewDropRate'];
+                        // Tipo operazione
+                        $clIsInsert = ($clOldGrd === null && $clOldDr === null);
+                        $clIsDelete = ($clNewGrd === null && $clNewDr === null);
+                        $clIsUpdate = !$clIsInsert && !$clIsDelete;
+                        $gradeChanged = $clIsUpdate && $clOldGrd !== $clNewGrd;
+                        $drChanged    = $clIsUpdate && $clOldDr !== $clNewDr;
+                        $navUrl = '/admin?view=drops_editor&mob_id=' . (int)$cl['MobID'];
                         if ($gMapId > 0) $navUrl .= '&map_id=' . $gMapId;
                         $navUrl .= '#row-' . (int)$cl['RowID'];
                     ?>
@@ -539,18 +810,40 @@ $filterQs = http_build_query(array_filter([
                         style="border-bottom:1px solid rgba(255,255,255,0.02); cursor:pointer; transition:background 0.15s;">
                         <td style="padding:8px 10px; color:#555; font-size:12px;"><?php echo $changedTime; ?></td>
                         <td style="padding:8px 10px; color:#aaa; font-size:13px;"><?php echo (int)$cl['MobID']; ?></td>
-                        <td style="padding:8px 10px; color:#ccc; font-size:12px; max-width:150px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="<?php echo htmlspecialchars((string)$cl['MobName']); ?>"><?php echo htmlspecialchars((string)$cl['MobName']); ?></td>
+                        <td style="padding:8px 10px; color:#ccc; font-size:12px; max-width:130px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="<?php echo htmlspecialchars((string)$cl['MobName']); ?>"><?php echo htmlspecialchars((string)$cl['MobName']); ?></td>
                         <td style="padding:8px 10px; color:#666; font-size:12px; text-align:center;"><?php echo (int)$cl['ItemOrder']; ?></td>
-                        <td style="padding:8px 10px; text-align:center; font-size:12px;">
-                            <?php if ($gradeChanged): ?><span style="color:#555;"><?php echo (int)$cl['OldGrade']; ?></span><span style="color:#444; margin:0 4px;">→</span><span style="color:#e8c881;"><?php echo (int)$cl['NewGrade']; ?></span>
-                            <?php else: ?><span style="color:#444;"><?php echo (int)$cl['NewGrade']; ?></span><?php endif; ?>
+                        <td style="padding:6px 10px; text-align:center;">
+                            <?php if ($clIsInsert): ?>
+                            <span style="background:rgba(72,187,120,0.12); border:1px solid rgba(72,187,120,0.25); color:#48bb78; border-radius:3px; padding:1px 6px; font-size:10px;">ADD</span>
+                            <?php elseif ($clIsDelete): ?>
+                            <span style="background:rgba(231,76,60,0.1); border:1px solid rgba(231,76,60,0.25); color:#e74c3c; border-radius:3px; padding:1px 6px; font-size:10px;">DEL</span>
+                            <?php else: ?>
+                            <span style="color:#555; font-size:11px;">UPD</span>
+                            <?php endif; ?>
                         </td>
                         <td style="padding:8px 10px; text-align:center; font-size:12px;">
-                            <?php if ($drChanged): ?><span style="color:#555;"><?php echo (int)$cl['OldDropRate']; ?></span><span style="color:#444; margin:0 4px;">→</span><span style="color:#3498db;"><?php echo (int)$cl['NewDropRate']; ?></span>
-                            <?php else: ?><span style="color:#444;"><?php echo (int)$cl['NewDropRate']; ?></span><?php endif; ?>
+                            <?php if ($clIsInsert): ?>
+                            <span style="color:#48bb78;"><?php echo $clNewGrd ?? '—'; ?></span>
+                            <?php elseif ($clIsDelete): ?>
+                            <span style="color:#e74c3c; text-decoration:line-through;"><?php echo $clOldGrd ?? '—'; ?></span>
+                            <?php elseif ($gradeChanged): ?>
+                            <span style="color:#555;"><?php echo $clOldGrd; ?></span><span style="color:#444; margin:0 4px;">→</span><span style="color:#e8c881;"><?php echo $clNewGrd; ?></span>
+                            <?php else: ?>
+                            <span style="color:#444;"><?php echo $clNewGrd ?? '—'; ?></span>
+                            <?php endif; ?>
+                        </td>
+                        <td style="padding:8px 10px; text-align:center; font-size:12px;">
+                            <?php if ($clIsInsert): ?>
+                            <span style="color:#48bb78;"><?php echo $clNewDr ?? '—'; ?></span>
+                            <?php elseif ($clIsDelete): ?>
+                            <span style="color:#e74c3c; text-decoration:line-through;"><?php echo $clOldDr ?? '—'; ?></span>
+                            <?php elseif ($drChanged): ?>
+                            <span style="color:#555;"><?php echo $clOldDr; ?></span><span style="color:#444; margin:0 4px;">→</span><span style="color:#3498db;"><?php echo $clNewDr; ?></span>
+                            <?php else: ?>
+                            <span style="color:#444;"><?php echo $clNewDr ?? '—'; ?></span>
+                            <?php endif; ?>
                         </td>
                         <td style="padding:8px 10px; text-align:right;" onclick="event.stopPropagation();">
-                            <?php if ($canUndo): ?>
                             <form method="POST" action="/admin_actions" style="display:inline;">
                                 <input type="hidden" name="action"               value="drops_undo_row">
                                 <input type="hidden" name="log_id"               value="<?php echo (int)$cl['LogID']; ?>">
@@ -560,10 +853,9 @@ $filterQs = http_build_query(array_filter([
                                 <input type="hidden" name="drop_filter_mob_name" value="<?php echo htmlspecialchars($filterMobName); ?>">
                                 <input type="hidden" name="drop_filter_map_id"   value="<?php echo $filterMapId; ?>">
                                 <input type="hidden" name="drop_filter_page"     value="<?php echo $filterPage; ?>">
-                                <button type="submit" onclick="return confirm('Undo change on MobID <?php echo (int)$cl['MobID']; ?>?');"
+                                <button type="submit" onclick="return confirm('Undo azione su MobID <?php echo (int)$cl['MobID']; ?>?');"
                                     style="background:rgba(231,76,60,0.08); border:1px solid rgba(231,76,60,0.2); color:#e74c3c; border-radius:4px; padding:3px 10px; font-size:11px; cursor:pointer; white-space:nowrap;">UNDO</button>
                             </form>
-                            <?php endif; ?>
                         </td>
                     </tr>
                     <?php endforeach; ?>
@@ -594,9 +886,155 @@ $filterQs = http_build_query(array_filter([
     </div>
 </div>
 
+<!-- ============================================================
+     MOB-CENTRIC MODAL (9 slot editor, caricato via AJAX)
+     ============================================================ -->
+<div id="modal-mc" class="dr-modal-overlay">
+    <div class="dr-modal-box" style="width:800px; max-height:92vh; overflow-y:auto; padding:0;">
+        <div class="dr-modal-header" style="position:sticky; top:0; z-index:1; background:#111;">
+            <div id="mc-modal-mob-info">
+                <div class="mc-mob-name" style="color:#666;">Caricamento…</div>
+            </div>
+            <div style="display:flex; align-items:center; gap:10px; flex-shrink:0;">
+                <div id="mc-modal-total" style="display:none; text-align:right; padding:6px 12px; background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.06); border-radius:6px;">
+                    <div style="color:#555; font-size:10px; text-transform:uppercase; letter-spacing:1px; margin-bottom:1px;">Slot 1-6</div>
+                    <div id="mc-modal-total-val" style="font-size:15px; font-weight:600;"></div>
+                </div>
+                <button class="dr-modal-close" id="btn-mc-close">&#x2715;</button>
+            </div>
+        </div>
+        <div class="dr-modal-body" style="padding:20px 24px;">
+            <div id="mc-modal-loading" style="text-align:center; padding:50px 0; color:#555;">
+                <i class="fas fa-spinner fa-spin" style="font-size:22px; display:block; margin-bottom:12px;"></i>
+                Caricamento slot…
+            </div>
+            <div id="mc-modal-slots" style="display:none;"></div>
+        </div>
+    </div>
+</div>
+
+<!-- ============================================================
+     ADD-ITEM MODAL (mob-centric)
+     ============================================================ -->
+<div id="modal-add-item" class="dr-modal-overlay">
+    <div class="dr-modal-box" style="width:580px;">
+        <div class="dr-modal-header">
+            <div>
+                <h3 style="color:#e8c881; margin:0 0 3px; font-size:16px;"><i class="fas fa-plus-circle" style="margin-right:10px;"></i>Add Drop Item</h3>
+                <p style="color:#555; font-size:12px; margin:0;">Slot <strong id="ai-slot-label">?</strong> — MobID <strong id="ai-mob-label">?</strong></p>
+            </div>
+            <button class="dr-modal-close" id="btn-ai-close">&#x2715;</button>
+        </div>
+        <div class="dr-modal-body">
+            <!-- Tabs ricerca -->
+            <div style="display:flex; gap:0; background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.06); border-radius:6px; overflow:hidden; margin-bottom:14px;">
+                <button id="ai-tab-name"  class="ai-tab-btn active"  style="flex:1; padding:8px; background:rgba(232,200,129,0.1); border:none; color:#e8c881; font-size:12px; cursor:pointer; border-right:1px solid rgba(255,255,255,0.06);">Per Nome</button>
+                <button id="ai-tab-grade" class="ai-tab-btn" style="flex:1; padding:8px; background:transparent; border:none; color:#555; font-size:12px; cursor:pointer;">Per Grade / ItemID</button>
+            </div>
+
+            <input type="text" id="ai-search-input" class="ai-search-input"
+                   placeholder="Cerca item per nome…" autocomplete="off">
+            <input type="number" id="ai-grade-input" class="ai-search-input"
+                   placeholder="Inserisci Grade o ItemID esatto" min="1" style="display:none;">
+
+            <div id="ai-results" class="ai-results">
+                <div class="ai-no-results" id="ai-hint">Digita almeno 2 caratteri per cercare.</div>
+            </div>
+
+            <div id="ai-selected-banner" class="ai-selected-banner">
+                <i class="fas fa-check-circle" style="margin-right:8px;"></i>
+                Selezionato: <strong id="ai-selected-name"></strong>
+                <span style="color:#555; margin-left:8px;">Grade: <span id="ai-selected-grade"></span></span>
+            </div>
+
+            <div class="ai-rate-row" id="ai-rate-section" style="display:none;">
+                <span class="ai-rate-label">DropRate<br><span id="ai-rate-hint" style="color:#444; font-size:10px; text-transform:none; letter-spacing:0;">(0-100)</span></span>
+                <input type="number" id="ai-rate-input" class="ai-rate-input"
+                       value="0" min="0" max="100" placeholder="0">
+                <span class="ai-rate-pct" id="ai-rate-pct">0.0000%</span>
+            </div>
+
+            <form id="form-add-item" method="POST" action="/admin_actions">
+                <input type="hidden" name="action"              value="drops_update_row">
+                <input type="hidden" name="csrf_token"          value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>">
+                <input type="hidden" name="return_view"         value="DROPS_EDITOR">
+                <input type="hidden" name="drop_filter_mob_id"  value="0">
+                <input type="hidden" name="drop_filter_map_id"  value="<?php echo (int)$filterMapId; ?>">
+                <input type="hidden" name="drop_filter_mob_name" value="<?php echo htmlspecialchars($filterMobName); ?>">
+                <input type="hidden" name="drop_filter_page"    value="<?php echo (int)$filterPage; ?>">
+                <input type="hidden" name="mc_open_mob_id"      id="ai-f-mc-open" value="">
+                <input type="hidden" name="row_id"              id="ai-f-rowid" value="">
+                <input type="hidden" name="grade"               id="ai-f-grade" value="">
+                <input type="hidden" name="drop_rate"           id="ai-f-rate"  value="0">
+                <button type="submit" id="ai-save-btn" class="ai-save-btn" disabled>
+                    <i class="fas fa-plus" style="margin-right:8px;"></i>AGGIUNGI SLOT
+                </button>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- ============================================================
+     HELP MODAL (mob-centric)
+     ============================================================ -->
+<div id="modal-drop-help" class="dr-modal-overlay">
+    <div class="dr-modal-box" style="width:640px;">
+        <div class="dr-modal-header">
+            <h3 style="color:#e8c881; margin:0; font-size:16px;"><i class="fas fa-question-circle" style="margin-right:10px;"></i>Guida Drop Editor</h3>
+            <button class="dr-modal-close" id="btn-help-close">&#x2715;</button>
+        </div>
+        <div class="dr-modal-body" style="padding:20px 28px;">
+
+            <div class="help-section-title">Struttura Slot (1-9 per mob)</div>
+            <table class="help-table">
+                <thead><tr><th>Slot</th><th>Range DropRate</th><th>Formula %</th><th>Esempio</th></tr></thead>
+                <tbody>
+                    <tr><td><span class="help-code">1–6</span></td><td>0 – 100</td><td>DropRate = %</td><td>50 → 50.00%</td></tr>
+                    <tr><td><span class="help-code">7–9</span> <span class="mc-slot-type-badge">×10k</span></td><td>0 – 1 000 000</td><td>DropRate ÷ 10 000</td><td>50 000 → 5.00%<br>1 000 000 → 100% (guaranteed)</td></tr>
+                </tbody>
+            </table>
+
+            <div class="help-section-title">Come aggiungere un drop</div>
+            <div class="help-step"><span class="help-step-num">1.</span><span>Filtra per <span class="help-code">Mappa</span>, <span class="help-code">Nome</span> o <span class="help-code">MobID</span> → vedi la lista mob → clicca <strong style="color:#e8c881;">EDIT</strong> su un mob.</span></div>
+            <div class="help-step"><span class="help-step-num">2.</span><span>Si apre il pannello 9 slot. Slot vuoto → clicca <strong style="color:#3498db;">+ ADD ITEM</strong>.</span></div>
+            <div class="help-step"><span class="help-step-num">3.</span><span>Cerca per <strong>Nome</strong> (≥ 2 caratteri) oppure inserisci <strong>Grade/ItemID</strong> esatto — seleziona dalla lista.</span></div>
+            <div class="help-step"><span class="help-step-num">4.</span><span>Inserisci DropRate → clicca <strong style="color:#48bb78;">AGGIUNGI SLOT</strong>.</span></div>
+            <div class="help-step"><span class="help-step-num">5.</span><span>Il pannello si riapre automaticamente con il nuovo slot. Usa <strong style="color:#e8c881;">SAVE</strong> per modificare il DropRate.</span></div>
+
+            <div class="help-section-title">Come rimuovere un drop</div>
+            <div class="help-step"><span class="help-step-num">1.</span><span>Slot pieno → clicca <strong style="color:#e74c3c;">✕</strong> → conferma.</span></div>
+            <div class="help-step"><span class="help-step-num">2.</span><span>Lo slot torna vuoto. Puoi re-inserire subito un nuovo item.</span></div>
+
+            <div class="help-section-title">Undo</div>
+            <div class="help-step"><span class="help-step-num">•</span><span>Ogni ADD / REMOVE / SAVE viene loggato per 24h.</span></div>
+            <div class="help-step"><span class="help-step-num">•</span><span>FAB in basso → <i class="fas fa-history"></i> Session Changes → UNDO su qualsiasi riga.</span></div>
+            <div class="help-step"><span class="help-step-num">•</span><span>UNDO di un ADD = DELETE. UNDO di un REMOVE = re-INSERT.</span></div>
+
+            <div class="help-section-title">Aggiungere nuovi items al DB</div>
+            <div class="help-step"><span class="help-step-num">1.</span><span>Apri <strong>Shaiya File Converter V2</strong> → carica <span class="help-code">Item.SData</span> → esporta <span class="help-code">Item.csv</span>.</span></div>
+            <div class="help-step"><span class="help-step-num">2.</span><span>Admin → Drops Management → sezione <strong>Upload CSV Items</strong>.</span></div>
+            <div class="help-step"><span class="help-step-num">3.</span><span>Preview → Conferma → nuovi items subito ricercabili nel drop editor.</span></div>
+
+            <div class="help-section-title">Export SQL</div>
+            <div class="help-step"><span class="help-step-num">•</span><span>FAB → <i class="fas fa-file-download"></i> Export SQL — richiede filtro Map attivo.</span></div>
+            <div class="help-step"><span class="help-step-num">•</span><span>Scarica file <span class="help-code">.sql</span> con tutti i drop della mappa selezionata.</span></div>
+
+        </div>
+    </div>
+</div>
+
+<script>
+/* Variabili PHP → JS */
+var PAGE_CSRF          = <?php echo json_encode($_SESSION['csrf_token'] ?? ''); ?>;
+var MC_FILTER_MAP_ID   = <?php echo $filterMapId !== null ? (int)$filterMapId : -1; ?>;
+var MC_FILTER_MOB_NAME = <?php echo json_encode($filterMobName); ?>;
+var MC_FILTER_PAGE     = <?php echo (int)$filterPage; ?>;
+var MC_FILTER_BOSS     = <?php echo $filterBossOnly ? '1' : '0'; ?>;
+var MC_AUTO_OPEN       = <?php echo (int)($mcAutoOpen ?? 0); ?>;
+</script>
 <script>
 (function () {
-    /* ── Modal ─────────────────────────────────────────────── */
+    /* ── Modal Changelog ───────────────────────────────────── */
     var modal = document.getElementById('modal-changelog');
     var closeBtn = document.getElementById('btn-changelog-close');
     document.body.appendChild(modal);
@@ -707,8 +1145,13 @@ $filterQs = http_build_query(array_filter([
     /* ── Live update % ─────────────────────────────────────── */
     document.querySelectorAll('.drop-rate-input').forEach(function (inp) {
         inp.addEventListener('input', function () {
-            var pct = this.closest('form').querySelector('.pct-display');
-            if (pct) pct.textContent = (parseFloat(this.value || 0) / 100000).toFixed(4) + '%';
+            var pct   = this.closest('form').querySelector('.pct-display');
+            var order = parseInt(this.closest('form').dataset.itemOrder || '1', 10);
+            if (pct) {
+                var raw = parseFloat(this.value || 0);
+                var val = order >= 7 ? raw / 10000 : raw;
+                pct.textContent = Math.min(100, Math.max(0, val)).toFixed(4) + '%';
+            }
         });
     });
 
@@ -722,5 +1165,516 @@ $filterQs = http_build_query(array_filter([
             if (!confirm('Update MobID ' + min + '-' + max + ' (ItemOrder ' + ord + ')?\nThis action cannot be undone.')) e.preventDefault();
         });
     }
+
+    /* ── Help modal ─────────────────────────────────────────── */
+    var helpModal  = document.getElementById('modal-drop-help');
+    var helpBtn    = document.getElementById('btn-drop-help');
+    var helpClose  = document.getElementById('btn-help-close');
+    if (helpModal) {
+        document.body.appendChild(helpModal);
+        function openHelp()  { helpModal.classList.add('active');    document.body.style.overflow = 'hidden'; }
+        function closeHelp() { helpModal.classList.remove('active'); document.body.style.overflow = ''; }
+        if (helpBtn)   helpBtn.addEventListener('click', openHelp);
+        if (helpClose) helpClose.addEventListener('click', closeHelp);
+        helpModal.addEventListener('click', function (e) { if (e.target === helpModal) closeHelp(); });
+        document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && helpModal.classList.contains('active')) closeHelp(); });
+    }
+
+    /* ── Mob-Centric Modal (AJAX) ───────────────────────────── */
+    var mcModal      = document.getElementById('modal-mc');
+    var mcClose      = document.getElementById('btn-mc-close');
+    var mcLoading    = document.getElementById('mc-modal-loading');
+    var mcSlots      = document.getElementById('mc-modal-slots');
+    var mcMobInfo    = document.getElementById('mc-modal-mob-info');
+    var mcTotal      = document.getElementById('mc-modal-total');
+    var mcTotalVal   = document.getElementById('mc-modal-total-val');
+    var mcCurrentMob = 0;
+
+    if (mcModal) {
+        document.body.appendChild(mcModal);
+
+        function openMcModal(mobId) {
+            mcCurrentMob = mobId;
+            mcLoading.style.display = 'block';
+            mcSlots.style.display   = 'none';
+            mcMobInfo.innerHTML     = '<div class="mc-mob-name" style="color:#666;">Caricamento…</div>';
+            mcTotal.style.display   = 'none';
+            mcModal.classList.add('active');
+            document.body.style.overflow = 'hidden';
+
+            fetch('/admin_actions?action=drops_get_slots&mob_id=' + mobId + '&csrf_token=' + encodeURIComponent(PAGE_CSRF), {
+                credentials: 'same-origin'
+            })
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                if (!data.ok) {
+                    mcLoading.innerHTML = '<p style="color:#e74c3c;">Errore: ' + (data.error || 'unknown') + '</p>';
+                    return;
+                }
+                renderMcModal(data, mobId);
+                mcLoading.style.display = 'none';
+                mcSlots.style.display   = 'block';
+            })
+            .catch(function () {
+                mcLoading.innerHTML = '<p style="color:#e74c3c;">Errore di rete</p>';
+            });
+        }
+
+        function closeMcModal() {
+            mcModal.classList.remove('active');
+            document.body.style.overflow = '';
+            mcCurrentMob = 0;
+        }
+
+        mcClose.addEventListener('click', closeMcModal);
+        mcModal.addEventListener('click', function (e) { if (e.target === mcModal) closeMcModal(); });
+        document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && mcModal.classList.contains('active')) closeMcModal(); });
+
+        function renderMcModal(data, mobId) {
+            var mob   = data.mob;
+            var slots = data.slots;
+            var attribL = ['','Fire','Water','Earth','Wind','Lightning','Light','Dark'];
+            var attrLbl = attribL[parseInt(mob.Attrib) || 0] || '';
+
+            // Header
+            var hHtml = '<div class="mc-mob-name">' + escHtml(mob.MobName) +
+                '<span style="color:#555; font-size:14px; font-weight:400; margin-left:10px;">ID: ' + mob.MobID + '</span></div>' +
+                '<div class="mc-mob-meta" style="margin-top:4px;">';
+            if (mob.Level)   hHtml += '<span style="margin-right:14px;">Lv. <strong style="color:#aaa;">' + mob.Level + '</strong></span>';
+            if (mob.HP)      hHtml += '<span style="margin-right:14px;">HP: <strong style="color:#aaa;">' + parseInt(mob.HP).toLocaleString() + '</strong></span>';
+            if (mob.MapName) hHtml += '<span style="margin-right:14px;">Map: <strong style="color:#aaa;">' + escHtml(mob.MapName) + '</strong></span>';
+            if (attrLbl)     hHtml += '<span>Element: <strong style="color:#aaa;">' + attrLbl + '</strong></span>';
+            hHtml += '</div>';
+            mcMobInfo.innerHTML = hHtml;
+
+            // Total %
+            var tot16 = 0;
+            slots.forEach(function (s) { if (s.ord <= 6 && s.filled) tot16 += s.drop_rate; });
+            if (tot16 > 0) {
+                mcTotal.style.display = 'block';
+                mcTotalVal.textContent = tot16.toFixed(2) + '%';
+                mcTotalVal.style.color = tot16 > 100 ? '#e74c3c' : '#48bb78';
+            } else {
+                mcTotal.style.display = 'none';
+            }
+
+            // Hidden fields shared across all slot forms
+            var hf = '<input type="hidden" name="csrf_token" value="' + escHtml(PAGE_CSRF) + '">' +
+                     '<input type="hidden" name="return_view" value="DROPS_EDITOR">' +
+                     '<input type="hidden" name="drop_filter_mob_id" value="0">' +
+                     (MC_FILTER_MAP_ID >= 0 ? '<input type="hidden" name="drop_filter_map_id" value="' + MC_FILTER_MAP_ID + '">' : '') +
+                     '<input type="hidden" name="drop_filter_mob_name" value="' + escHtml(MC_FILTER_MOB_NAME) + '">' +
+                     '<input type="hidden" name="drop_filter_page" value="' + MC_FILTER_PAGE + '">' +
+                     (MC_FILTER_BOSS ? '<input type="hidden" name="drop_filter_boss_only" value="1">' : '') +
+                     '<input type="hidden" name="mc_open_mob_id" value="' + mobId + '">';
+
+            // Build 9-slot table
+            var html = '<table class="mc-slot-table"><thead><tr>' +
+                '<th style="width:52px;">Slot</th><th>Item</th>' +
+                '<th style="width:130px;">DropRate (raw)</th><th style="width:80px;">%</th>' +
+                '<th style="width:90px;">Grade</th><th style="width:160px;">Azioni</th>' +
+                '</tr></thead><tbody>';
+
+            slots.forEach(function (s) {
+                var hi   = s.ord >= 7;
+                var snum = '<div class="mc-slot-num' + (hi ? ' mc-slot-high' : '') + '">' + s.ord +
+                           (hi ? '<span class="mc-slot-type-badge">&times;10k</span>' : '') + '</div>';
+                var sid  = 'mcms-' + s.ord;
+                var did  = 'mcmd-' + s.ord;
+
+                if (s.filled) {
+                    var maxR = hi ? 1000000 : 100;
+                    var pct  = hi ? (s.drop_rate / 10000).toFixed(4) : parseFloat(s.drop_rate).toFixed(4);
+                    html += '<tr class="mc-row-filled">' +
+                        '<td>' + snum + '</td>' +
+                        '<td><span class="mc-item-name">' + escHtml(s.item_name || '???') + '</span>' +
+                        (s.req_level > 0 ? '<span class="mc-item-level">Lv.' + s.req_level + '</span>' : '') + '</td>' +
+                        '<td><div class="mc-rate-wrap"><input type="number" name="drop_rate" form="' + sid + '"' +
+                        ' class="mc-rate-input' + (hi ? ' mc-rate-high' : '') + '"' +
+                        ' data-high="' + (hi ? '1' : '0') + '" data-form="' + sid + '"' +
+                        ' value="' + s.drop_rate + '" min="0" max="' + maxR + '"' +
+                        ' title="' + (hi ? 'Valore 0-1000000 (1000000=100%)' : 'Valore 0-100 (% diretta)') + '"></div></td>' +
+                        '<td><span class="mc-pct-display">' + pct + '%</span></td>' +
+                        '<td style="color:#555; font-size:12px;"><span class="grade-tip-trigger" data-grade="' + s.grade + '" style="cursor:help;border-bottom:1px dotted #333;">' + s.grade + '</span></td>' +
+                        '<td>' +
+                        '<form id="' + sid + '" method="POST" action="/admin_actions" data-item-order="' + s.ord + '">' +
+                        '<input type="hidden" name="action" value="drops_update_row">' +
+                        '<input type="hidden" name="row_id" value="' + s.rowid + '">' +
+                        '<input type="hidden" name="grade" value="' + s.grade + '">' +
+                        hf +
+                        '<button type="submit" class="mc-btn-save">SAVE</button>' +
+                        '</form>' +
+                        '<form id="' + did + '" method="POST" action="/admin_actions" style="display:inline; margin-left:6px;">' +
+                        '<input type="hidden" name="action" value="drops_update_row">' +
+                        '<input type="hidden" name="row_id" value="' + s.rowid + '">' +
+                        '<input type="hidden" name="grade" value="0">' +
+                        '<input type="hidden" name="drop_rate" value="0">' +
+                        hf +
+                        '<button type="submit" class="mc-btn-remove"' +
+                        ' onclick="return confirm(\'Svuotare slot ' + s.ord + '? (Grade → 0, DropRate → 0)\')">&#x2715;</button>' +
+                        '</form>' +
+                        '</td></tr>';
+                } else {
+                    html += '<tr class="mc-row-empty">' +
+                        '<td>' + snum + '</td>' +
+                        '<td colspan="3" style="color:#333; font-size:13px; font-style:italic;">— slot vuoto —</td>' +
+                        '<td></td>' +
+                        '<td><button class="mc-btn-add" data-slot="' + s.ord + '" data-mob="' + mobId +
+                        '" data-rowid="' + s.rowid + '" data-ishigh="' + (hi ? '1' : '0') + '">' +
+                        '+ ADD ITEM</button></td></tr>';
+                }
+            });
+            html += '</tbody></table>';
+            mcSlots.innerHTML = html;
+
+            // Attach live % listener to modal rate inputs
+            mcSlots.querySelectorAll('.mc-rate-input').forEach(function (inp) {
+                inp.addEventListener('input', function () {
+                    var high = this.getAttribute('data-high') === '1';
+                    var raw  = parseFloat(this.value || 0);
+                    var val  = high ? raw / 10000 : raw;
+                    val = Math.min(100, Math.max(0, val));
+                    var pctEl = this.closest('tr').querySelector('.mc-pct-display');
+                    if (pctEl) pctEl.textContent = val.toFixed(4) + '%';
+                });
+            });
+        }
+
+        // Intercetta link EDIT nella mob-list → apri modal
+        document.addEventListener('click', function (e) {
+            var link = e.target.closest('.mc-edit-link');
+            if (link) {
+                e.preventDefault();
+                var mid = parseInt(link.getAttribute('data-mob-id'), 10);
+                if (mid > 0) openMcModal(mid);
+            }
+        });
+
+        // Event delegation per .mc-btn-add dentro il modal mob-centric
+        mcSlots.addEventListener('click', function (e) {
+            var btn = e.target.closest('.mc-btn-add');
+            if (btn) {
+                openAi(
+                    btn.getAttribute('data-slot'),
+                    btn.getAttribute('data-mob'),
+                    btn.getAttribute('data-rowid'),
+                    btn.getAttribute('data-ishigh') === '1',
+                    mcCurrentMob
+                );
+            }
+        });
+
+        // Auto-open modal al caricamento pagina (dopo save o mob_id diretto)
+        if (MC_AUTO_OPEN > 0) {
+            window.addEventListener('load', function () {
+                openMcModal(MC_AUTO_OPEN);
+            });
+        }
+    }
+
+    /* ── Add-Item modal ─────────────────────────────────────── */
+    var aiModal    = document.getElementById('modal-add-item');
+    var aiClose    = document.getElementById('btn-ai-close');
+    var aiSearch   = document.getElementById('ai-search-input');
+    var aiGradeInp = document.getElementById('ai-grade-input');
+    var aiTabName  = document.getElementById('ai-tab-name');
+    var aiTabGrade = document.getElementById('ai-tab-grade');
+    var aiResults  = document.getElementById('ai-results');
+    var aiBanner   = document.getElementById('ai-selected-banner');
+    var aiSelName  = document.getElementById('ai-selected-name');
+    var aiSelGrd   = document.getElementById('ai-selected-grade');
+    var aiRateSec  = document.getElementById('ai-rate-section');
+    var aiRateInp  = document.getElementById('ai-rate-input');
+    var aiRatePct  = document.getElementById('ai-rate-pct');
+    var aiRateHint = document.getElementById('ai-rate-hint');
+    var aiSaveBtn  = document.getElementById('ai-save-btn');
+    var aiFRowId   = document.getElementById('ai-f-rowid');
+    var aiFGrade   = document.getElementById('ai-f-grade');
+    var aiFRate    = document.getElementById('ai-f-rate');
+    var aiFMcOpen  = document.getElementById('ai-f-mc-open');
+    var aiSlotLbl  = document.getElementById('ai-slot-label');
+    var aiMobLbl   = document.getElementById('ai-mob-label');
+    var aiCurIsHigh = false;
+    var aiUseGradeTab = false;
+    var aiCsrfToken = document.querySelector('#form-add-item [name=csrf_token]').value;
+
+    if (aiModal) {
+        document.body.appendChild(aiModal);
+
+        function openAi(slot, mob, rowid, isHigh, mobIdForReopen) {
+            aiCurIsHigh = isHigh;
+            aiSlotLbl.textContent = slot;
+            aiMobLbl.textContent  = mob;
+            aiFRowId.value        = rowid;
+            aiFGrade.value        = '';
+            aiFRate.value         = '0';
+            aiFMcOpen.value       = mobIdForReopen || 0;
+            aiSearch.value        = '';
+            aiGradeInp.value      = '';
+            aiResults.innerHTML   = '<div class="ai-no-results">Digita almeno 2 caratteri per cercare.</div>';
+            aiBanner.classList.remove('visible');
+            aiRateSec.style.display = 'none';
+            aiSaveBtn.disabled      = true;
+            aiRateInp.max           = isHigh ? 1000000 : 100;
+            aiRateHint.textContent  = isHigh ? '0-1000000 (1000000=100%)' : '0-100 (%)';
+            // Reset to name tab
+            switchAiTab(false);
+            aiModal.classList.add('active');
+            document.body.style.overflow = 'hidden';
+            setTimeout(function () { aiSearch.focus(); }, 100);
+        }
+
+        function switchAiTab(useGrade) {
+            aiUseGradeTab = useGrade;
+            if (useGrade) {
+                aiTabName.style.background  = 'transparent';
+                aiTabName.style.color       = '#555';
+                aiTabGrade.style.background = 'rgba(232,200,129,0.1)';
+                aiTabGrade.style.color      = '#e8c881';
+                aiSearch.style.display   = 'none';
+                aiGradeInp.style.display = '';
+                aiResults.innerHTML = '<div class="ai-no-results">Inserisci Grade o ItemID esatto.</div>';
+            } else {
+                aiTabGrade.style.background = 'transparent';
+                aiTabGrade.style.color      = '#555';
+                aiTabName.style.background  = 'rgba(232,200,129,0.1)';
+                aiTabName.style.color       = '#e8c881';
+                aiGradeInp.style.display = 'none';
+                aiSearch.style.display   = '';
+                aiResults.innerHTML = '<div class="ai-no-results">Digita almeno 2 caratteri per cercare.</div>';
+            }
+        }
+
+        if (aiTabName)  aiTabName.addEventListener('click',  function () { switchAiTab(false); aiSearch.focus(); });
+        if (aiTabGrade) aiTabGrade.addEventListener('click', function () { switchAiTab(true);  aiGradeInp.focus(); });
+
+        function closeAi() {
+            aiModal.classList.remove('active');
+            document.body.style.overflow = '';
+        }
+
+        if (aiClose) aiClose.addEventListener('click', closeAi);
+        aiModal.addEventListener('click', function (e) { if (e.target === aiModal) closeAi(); });
+        document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && aiModal.classList.contains('active')) closeAi(); });
+
+        // AJAX search per nome con debounce
+        var aiDebTimer = null;
+        aiSearch.addEventListener('input', function () {
+            clearTimeout(aiDebTimer);
+            var q = this.value.trim();
+            if (q.length < 2) {
+                aiResults.innerHTML = '<div class="ai-no-results">Digita almeno 2 caratteri per cercare.</div>';
+                return;
+            }
+            aiResults.innerHTML = '<div class="ai-no-results"><i class="fas fa-circle-notch fa-spin"></i> Ricerca…</div>';
+            aiDebTimer = setTimeout(function () {
+                fetch('/admin_actions?action=drops_search_items&q=' + encodeURIComponent(q) + '&csrf_token=' + encodeURIComponent(aiCsrfToken), { credentials: 'same-origin' })
+                .then(function (r) { return r.json(); })
+                .then(function (d) { renderAiResults(d.items || []); })
+                .catch(function () { aiResults.innerHTML = '<div class="ai-no-results" style="color:#e74c3c;">Errore di ricerca.</div>'; });
+            }, 280);
+        });
+
+        // Ricerca per Grade esatto
+        var aiGradeTimer = null;
+        aiGradeInp.addEventListener('input', function () {
+            clearTimeout(aiGradeTimer);
+            var g = parseInt(this.value || 0);
+            if (g <= 0) {
+                aiResults.innerHTML = '<div class="ai-no-results">Inserisci Grade o ItemID esatto.</div>';
+                return;
+            }
+            aiResults.innerHTML = '<div class="ai-no-results"><i class="fas fa-circle-notch fa-spin"></i> Ricerca…</div>';
+            aiGradeTimer = setTimeout(function () {
+                fetch('/admin_actions?action=drops_search_items&grade=' + g + '&csrf_token=' + encodeURIComponent(aiCsrfToken), { credentials: 'same-origin' })
+                .then(function (r) { return r.json(); })
+                .then(function (d) { renderAiResults(d.items || []); })
+                .catch(function () { aiResults.innerHTML = '<div class="ai-no-results" style="color:#e74c3c;">Errore di ricerca.</div>'; });
+            }, 150);
+        });
+
+        function renderAiResults(items) {
+            if (!items.length) {
+                aiResults.innerHTML = '<div class="ai-no-results">Nessun item trovato.</div>';
+                return;
+            }
+            var html = '';
+            items.forEach(function (it) {
+                html += '<div class="ai-result-item" data-grade="' + it.Grade + '" data-name="' + escHtml(it.ItemName) + '">'
+                      + '<span class="ai-result-name">' + escHtml(it.ItemName) + '</span>'
+                      + '<span class="ai-result-meta">Gr.' + it.Grade + (it.Reqlevel > 0 ? ' · Lv.' + it.Reqlevel : '') + '</span>'
+                      + '</div>';
+            });
+            aiResults.innerHTML = html;
+            aiResults.querySelectorAll('.ai-result-item').forEach(function (el) {
+                el.addEventListener('click', function () {
+                    aiResults.querySelectorAll('.ai-result-item').forEach(function (x) { x.classList.remove('selected'); });
+                    this.classList.add('selected');
+                    aiFGrade.value = this.getAttribute('data-grade');
+                    aiSelName.textContent = this.getAttribute('data-name');
+                    aiSelGrd.textContent  = this.getAttribute('data-grade');
+                    aiBanner.classList.add('visible');
+                    aiRateSec.style.display = 'flex';
+                    aiSaveBtn.disabled = false;
+                    aiRateInp.focus();
+                });
+            });
+        }
+
+        if (aiRateInp) {
+            aiRateInp.addEventListener('input', function () {
+                var raw = parseFloat(this.value || 0);
+                var pct = aiCurIsHigh ? raw / 10000 : raw;
+                pct = Math.min(100, Math.max(0, pct));
+                aiRatePct.textContent = pct.toFixed(4) + '%';
+                aiFRate.value = this.value;
+            });
+        }
+    }
+
+    function escHtml(s) {
+        var d = document.createElement('div');
+        d.textContent = s || '';
+        return d.innerHTML;
+    }
+
+    /* ── Slot tooltip (JS fixed, tutto inline per evitare CSS globale) ── */
+    var slotTip = document.createElement('div');
+    slotTip.style.cssText = [
+        'display:none', 'position:fixed', 'z-index:9999', 'pointer-events:none',
+        'width:320px', 'max-height:280px', 'overflow:hidden',
+        'background:rgba(8,8,10,0.97)', 'border:1px solid rgba(232,200,129,0.22)',
+        'border-radius:8px', 'box-shadow:0 12px 40px rgba(0,0,0,0.85)',
+        'font-size:12px', 'font-family:sans-serif', 'line-height:1.4',
+        'color:#ccc'
+    ].join(';');
+    document.body.appendChild(slotTip);
+
+    var TD  = 'style="padding:6px 10px;border-bottom:1px solid rgba(255,255,255,0.04);font-size:12px;font-weight:normal;"';
+    var TDR = 'style="padding:6px 10px;border-bottom:1px solid rgba(255,255,255,0.04);font-size:12px;font-weight:normal;text-align:right;"';
+    var TH  = 'style="padding:7px 10px;font-size:10px;color:#555;text-transform:uppercase;letter-spacing:0.7px;font-weight:500;text-align:left;background:rgba(232,200,129,0.06);"';
+    var THR = 'style="padding:7px 10px;font-size:10px;color:#555;text-transform:uppercase;letter-spacing:0.7px;font-weight:500;text-align:right;background:rgba(232,200,129,0.06);"';
+
+    function posSlotTip(e) {
+        var x = e.clientX + 16;
+        var y = e.clientY - Math.round(slotTip.offsetHeight / 2);
+        if (x + slotTip.offsetWidth > window.innerWidth  - 8) x = e.clientX - slotTip.offsetWidth - 16;
+        if (y < 6) y = 6;
+        if (y + slotTip.offsetHeight > window.innerHeight - 6) y = window.innerHeight - slotTip.offsetHeight - 6;
+        slotTip.style.left = x + 'px';
+        slotTip.style.top  = y + 'px';
+    }
+
+    document.addEventListener('mouseover', function(e) {
+        var trig = e.target.closest('.slot-tip-trigger');
+        if (!trig) return;
+        var slots;
+        try { slots = JSON.parse(trig.getAttribute('data-slots') || '[]'); } catch(x) { return; }
+        if (!slots.length) return;
+
+        var html = '<table style="width:100%;border-collapse:collapse;"><thead><tr>'
+            + '<th ' + TH  + '>Item</th>'
+            + '<th ' + THR + '>Raw</th>'
+            + '<th ' + THR + '>%</th>'
+            + '<th ' + THR + '>Grade</th>'
+            + '</tr></thead><tbody>';
+        slots.forEach(function(s) {
+            var pctStr = (s.pct % 1 === 0) ? s.pct.toFixed(0) : s.pct.toFixed(4).replace(/\.?0+$/, '');
+            html += '<tr>'
+                + '<td ' + TD  + ' style="padding:6px 10px;border-bottom:1px solid rgba(255,255,255,0.04);font-size:12px;color:#ddd;">' + escHtml(s.name) + '</td>'
+                + '<td ' + TDR + ' style="padding:6px 10px;border-bottom:1px solid rgba(255,255,255,0.04);font-size:12px;color:#555;text-align:right;">' + s.raw + (s.hi ? '<span style="font-size:9px;color:#3498db;margin-left:2px;">\xd710k</span>' : '') + '</td>'
+                + '<td ' + TDR + ' style="padding:6px 10px;border-bottom:1px solid rgba(255,255,255,0.04);font-size:12px;color:#48bb78;font-weight:600;text-align:right;">' + pctStr + '%</td>'
+                + '<td ' + TDR + ' style="padding:6px 10px;border-bottom:1px solid rgba(255,255,255,0.04);font-size:12px;color:#555;text-align:right;">' + s.grade + '</td>'
+                + '</tr>';
+        });
+        html += '</tbody></table>';
+        slotTip.innerHTML = html;
+        slotTip.style.display = 'block';
+        posSlotTip(e);
+    });
+
+    document.addEventListener('mousemove', function(e) {
+        if (slotTip.style.display !== 'none') {
+            if (e.target.closest('.slot-tip-trigger')) posSlotTip(e);
+            else slotTip.style.display = 'none';
+        }
+    });
+
+    document.addEventListener('mouseleave', function() { slotTip.style.display = 'none'; });
+
+    /* ── Grade items tooltip (scrollabile, sticky su hover) ── */
+    var gradeTip = document.createElement('div');
+    gradeTip.style.cssText = [
+        'display:none', 'position:fixed', 'z-index:9999',
+        'width:270px', 'max-height:260px', 'overflow-y:auto',
+        'background:rgba(8,8,10,0.97)', 'border:1px solid rgba(52,152,219,0.25)',
+        'border-radius:8px', 'box-shadow:0 12px 40px rgba(0,0,0,0.85)',
+        'font-size:12px', 'font-family:sans-serif', 'line-height:1.4', 'color:#ccc',
+        // scrollbar sottile
+        'scrollbar-width:thin', 'scrollbar-color:rgba(52,152,219,0.3) transparent'
+    ].join(';');
+    document.body.appendChild(gradeTip);
+
+    var gradeCache   = {};
+    var gtHideTimer  = null;
+
+    function posGradeTip(x, y) {
+        gradeTip.style.left = (x + 14) + 'px';
+        gradeTip.style.top  = y + 'px';
+        requestAnimationFrame(function () {
+            var r = gradeTip.getBoundingClientRect();
+            if (r.right  > window.innerWidth  - 8) gradeTip.style.left = (x - r.width - 14) + 'px';
+            if (r.bottom > window.innerHeight - 8) gradeTip.style.top  = (window.innerHeight - r.height - 8) + 'px';
+        });
+    }
+
+    function renderGradeTip(grade, items) {
+        if (!items.length) {
+            gradeTip.innerHTML = '<div style="padding:12px;color:#444;font-size:12px;">Nessun item trovato</div>';
+            return;
+        }
+        var hdr = '<div style="padding:8px 12px;position:sticky;top:0;background:rgba(8,8,10,0.97);border-bottom:1px solid rgba(52,152,219,0.15);font-size:10px;color:#3498db;text-transform:uppercase;letter-spacing:0.8px;">'
+            + 'Grade ' + grade + ' &mdash; ' + items.length + ' item</div>';
+        var rows = '';
+        items.forEach(function (it) {
+            rows += '<div style="display:flex;justify-content:space-between;padding:5px 12px;border-bottom:1px solid rgba(255,255,255,0.04);">'
+                + '<span style="font-size:12px;color:#ccc;">' + escHtml(it.ItemName) + '</span>'
+                + (it.Reqlevel > 0 ? '<span style="font-size:11px;color:#555;white-space:nowrap;margin-left:8px;">Lv.' + it.Reqlevel + '</span>' : '')
+                + '</div>';
+        });
+        gradeTip.innerHTML = hdr + rows;
+    }
+
+    function showGradeTip(grade, x, y) {
+        clearTimeout(gtHideTimer);
+        posGradeTip(x, y);
+        gradeTip.style.display = 'block';
+        if (gradeCache[grade] !== undefined) {
+            renderGradeTip(grade, gradeCache[grade]);
+            return;
+        }
+        gradeTip.innerHTML = '<div style="padding:12px;color:#555;font-size:12px;"><i class="fas fa-circle-notch fa-spin"></i> Caricamento…</div>';
+        fetch('/admin_actions?action=drops_search_items&grade=' + grade + '&csrf_token=' + encodeURIComponent(PAGE_CSRF), { credentials: 'same-origin' })
+            .then(function (r) { return r.json(); })
+            .then(function (d) { gradeCache[grade] = d.items || []; renderGradeTip(grade, gradeCache[grade]); })
+            .catch(function ()  { gradeTip.innerHTML = '<div style="padding:12px;color:#e74c3c;">Errore</div>'; });
+    }
+
+    function hideGradeTip() {
+        gtHideTimer = setTimeout(function () { gradeTip.style.display = 'none'; }, 150);
+    }
+
+    // Event delegation su mcSlots (content dinamico)
+    if (mcSlots) {
+        mcSlots.addEventListener('mouseover', function (e) {
+            var trig = e.target.closest('.grade-tip-trigger');
+            if (trig) showGradeTip(parseInt(trig.getAttribute('data-grade'), 10), e.clientX, e.clientY);
+        });
+        mcSlots.addEventListener('mouseout', function (e) {
+            if (e.target.closest('.grade-tip-trigger')) hideGradeTip();
+        });
+    }
+    gradeTip.addEventListener('mouseenter', function () { clearTimeout(gtHideTimer); });
+    gradeTip.addEventListener('mouseleave', function () { hideGradeTip(); });
 })();
 </script>
