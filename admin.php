@@ -570,7 +570,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && (isset($_POST['admin_action']) || i
 
     if ($action === 'update_item' && isset($_POST['item_uid'])) {
         $itemUID = (int) $_POST['item_uid'];
-        $charID = (int) $_POST['char_id'];
+        $charID  = (int) $_POST['char_id'];
+
+        // Validate item belongs to char AND is an equippable type (not consumable/lapis/etc.)
+        $equipTypesAdmin = array_merge(range(1,24), range(31,37), [40,41], range(45,65), range(67,77), range(82,92), [96,97]);
+        try {
+            $chk = $pdoAdmin->prepare(
+                "SELECT I.Type FROM PS_GameData.dbo.CharItems CI
+                 LEFT JOIN PS_GameDefs.dbo.Items I ON I.ItemID = CI.ItemID
+                 WHERE CI.ItemUID = ? AND CI.CharID = ? AND CI.Del = 0"
+            );
+            $chk->execute([$itemUID, $charID]);
+            $chkRow = $chk->fetch(PDO::FETCH_ASSOC);
+            if (!$chkRow || !in_array((int)($chkRow['Type'] ?? 0), $equipTypesAdmin, true)) {
+                header("Location: /admin?view=CharEdit&id=$charID&tab=Inventory&msg=invalid_item");
+                exit;
+            }
+        } catch (Throwable $e) {
+            header("Location: /admin?view=CharEdit&id=$charID&tab=Inventory");
+            exit;
+        }
 
         $str = str_pad(min(50, max(0, (int) ($_POST['stat_str'] ?? 0))), 2, '0', STR_PAD_LEFT);
         $dex = str_pad(min(50, max(0, (int) ($_POST['stat_dex'] ?? 0))), 2, '0', STR_PAD_LEFT);
@@ -585,12 +604,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && (isset($_POST['admin_action']) || i
 
         $newCraftname = $str . $dex . $rec . $int . $wis . $luc . $hp . $sp . $mp . $ench;
 
-        $gem1 = (int) ($_POST['gem1'] ?? 0);
-        $gem2 = (int) ($_POST['gem2'] ?? 0);
-        $gem3 = (int) ($_POST['gem3'] ?? 0);
-        $gem4 = (int) ($_POST['gem4'] ?? 0);
-        $gem5 = (int) ($_POST['gem5'] ?? 0);
-        $gem6 = (int) ($_POST['gem6'] ?? 0);
+        $gem1 = min(255, max(0, (int) ($_POST['gem1'] ?? 0)));
+        $gem2 = min(255, max(0, (int) ($_POST['gem2'] ?? 0)));
+        $gem3 = min(255, max(0, (int) ($_POST['gem3'] ?? 0)));
+        $gem4 = min(255, max(0, (int) ($_POST['gem4'] ?? 0)));
+        $gem5 = min(255, max(0, (int) ($_POST['gem5'] ?? 0)));
+        $gem6 = min(255, max(0, (int) ($_POST['gem6'] ?? 0)));
 
         $updateSql = "UPDATE PS_GameData.dbo.CharItems 
                       SET Craftname = ?, Gem1 = ?, Gem2 = ?, Gem3 = ?, Gem4 = ?, Gem5 = ?, Gem6 = ? 
@@ -600,7 +619,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && (isset($_POST['admin_action']) || i
             $stmt->execute([$newCraftname, $gem1, $gem2, $gem3, $gem4, $gem5, $gem6, $itemUID, $charID]);
             header("Location: /admin?view=CharEdit&id=$charID&tab=Inventory&msg=item_updated");
             exit;
-        } catch (Throwable $e) { }
+        } catch (Throwable $e) {
+            error_log('update_item failed: ' . $e->getMessage());
+            header("Location: /admin?view=CharEdit&id=$charID&tab=Inventory&msg=error_item_update");
+            exit;
+        }
     }
 
 
