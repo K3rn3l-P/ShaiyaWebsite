@@ -497,7 +497,9 @@ function schedulerCommandAllowedByWhitelist(string $commandText): bool
 
 function executeGameSlashCommand(PDO $pdoConn, string $serviceName, string $commandText): bool
 {
-    $stmt = $pdoConn->prepare("EXEC [PS_GameDefs].[dbo].[Command] @serviceName = ?, @cmmd = ?");
+    // Canale comandi sicuro: PSM_Cmd.usp_RunCommand (allowlist + tier per-account + audit).
+    // L'account web (Ernoweb@) e' tier PLAYER -> consentiti /nt + /kick*, bloccati economia/service.
+    $stmt = $pdoConn->prepare("EXEC [PSM_Cmd].[dbo].[usp_RunCommand] @service = ?, @command = ?");
     if ($stmt === false) {
         return false;
     }

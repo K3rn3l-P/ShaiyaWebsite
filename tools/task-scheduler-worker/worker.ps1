@@ -510,14 +510,16 @@ function Invoke-JobExecution {
         $commandToRun = [string]$effectiveCommand.Command
         $secondCommandToRun = [string]$effectiveCommand.SecondaryCommand
         $sqlIdentity = Get-SqlConnectionIdentity -ConnectionString ([string]$Config.sql_connection_string)
-        $sql = 'EXEC [PS_GameDefs].[dbo].[Command] @serviceName = @ServiceName, @cmmd = @CmdText'
-        Invoke-SqlNonQuery -ConnectionString ([string]$Config.sql_connection_string) -CommandText $sql -Parameters @{
+        # Canale comandi sicuro: connessione dedicata ShaiyaTaskAgent -> PSM_Cmd.usp_RunCommand
+        # (tier ECONOMY). Le READ (task/meta) restano sulla connessione principale Ernoweb@.
+        $sql = 'EXEC [PSM_Cmd].[dbo].[usp_RunCommand] @service = @ServiceName, @command = @CmdText'
+        Invoke-SqlNonQuery -ConnectionString ([string]$Config.command_connection_string) -CommandText $sql -Parameters @{
             '@ServiceName' = $serviceName
             '@CmdText'     = $commandToRun
         }
 
         if (-not [string]::IsNullOrWhiteSpace($secondCommandToRun)) {
-            Invoke-SqlNonQuery -ConnectionString ([string]$Config.sql_connection_string) -CommandText $sql -Parameters @{
+            Invoke-SqlNonQuery -ConnectionString ([string]$Config.command_connection_string) -CommandText $sql -Parameters @{
                 '@ServiceName' = $serviceName
                 '@CmdText'     = $secondCommandToRun
             }
@@ -528,7 +530,7 @@ function Invoke-JobExecution {
             $secondCommandLog = " | second_command=$secondCommandToRun"
         }
 
-        return @{ Status = 'success'; Output = "SERVICE_COMMAND executed for JobID $JobId | service=$serviceName | command=$commandToRun$secondCommandLog | command_proc=PS_GameDefs.dbo.Command | sql_server=$($sqlIdentity.Server) | sql_db=$($sqlIdentity.Database)$([string]$effectiveCommand.Note)"; Error = '' }
+        return @{ Status = 'success'; Output = "SERVICE_COMMAND executed for JobID $JobId | service=$serviceName | command=$commandToRun$secondCommandLog | command_proc=PSM_Cmd.dbo.usp_RunCommand | sql_server=$($sqlIdentity.Server) | sql_db=$($sqlIdentity.Database)$([string]$effectiveCommand.Note)"; Error = '' }
     }
 
     if ($taskType -eq 'SQL_SCRIPT') {

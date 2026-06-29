@@ -102,7 +102,7 @@ BEGIN
     IF IS_ROLEMEMBER('MioRuoloInsert',  'Ernoweb@') = 0 EXEC sp_addrolemember 'MioRuoloInsert',  'Ernoweb@';
     IF IS_ROLEMEMBER('MioRuoloUpdate',  'Ernoweb@') = 0 EXEC sp_addrolemember 'MioRuoloUpdate',  'Ernoweb@';
     IF IS_ROLEMEMBER('MioRuoloDelete',  'Ernoweb@') = 0 EXEC sp_addrolemember 'MioRuoloDelete',  'Ernoweb@';
-    IF IS_ROLEMEMBER('MioRuoloExecute', 'Ernoweb@') = 0 EXEC sp_addrolemember 'MioRuoloExecute', 'Ernoweb@';
+    -- IF IS_ROLEMEMBER('MioRuoloExecute', 'Ernoweb@') = 0 EXEC sp_addrolemember 'MioRuoloExecute', 'Ernoweb@';
 
     PRINT 'PS_GameDefs: Ernoweb@ aggiornato → READ + INSERT + UPDATE + DELETE + EXECUTE';
 END

@@ -710,7 +710,7 @@
                                             <li>Imposta <code>api_url</code> su <code>http://127.0.0.1/task_scheduler_worker_api.php</code> solo se il worker gira sulla stessa macchina del sito; altrimenti usa l'URL interno corretto e mantieni l'endpoint limitato al loopback lato server.</li>
                                             <li>Compila <code>sql_connection_string</code> con il database del sito web (es. <code>PS_WebSite</code>) e poi esegui <b>install-worker.ps1</b> come Administrator: il task Windows viene registrato con polling a intervalli di minuti tramite <code>schtasks.exe</code>. Se nell'XML vedi <code>&lt;TimeTrigger&gt;</code> con <code>PT1M</code>, il worker poller e' configurato correttamente.</li>
                                             <li>In <b>Permissions Management</b> abilita <code>TASK_SCHEDULER</code>, scegli <b>Quick Command Job</b> o <b>Advanced Job</b>, poi crea/modifica il job e controlla <b>heartbeat</b> e <b>run log</b>: il pannello prepara i job, il worker Windows li consuma e li traduce in task locali quando serve.</li>
-                                            <li><b>Esempio pratico dal tuo script manuale</b>: i job <code>SERVICE_COMMAND</code> usano ora direttamente <code>PS_GameDefs.dbo.Command</code>, quindi puoi usare sia <code>/nt ...</code> sia <code>/exp2xenable 100</code> nel flusso scheduler standard.</li>
+                                            <li><b>Esempio pratico dal tuo script manuale</b>: i job <code>SERVICE_COMMAND</code> usano ora direttamente <code>PSM_Cmd.dbo.usp_RunCommand</code>, quindi puoi usare sia <code>/nt ...</code> sia <code>/exp2xenable 100</code> nel flusso scheduler standard.</li>
                                         </ol>
                                     </div>
                                 </details>
@@ -725,7 +725,7 @@
                                         <div><b>Worker Poller</b>: il task <code>ShaiyaSchedulerWorker</code> gira ogni minuto e sincronizza i job dal sito verso Task Scheduler.</div>
                                         <div><b>Job Trigger</b>: dopo il salvataggio del job, il worker crea o aggiorna il task locale <code>ShaiyaWebJob_&lt;JobID&gt;</code> con il suo trigger Windows.</div>
                                         <div><b>Service</b>: servizio target del comando, ad esempio <code>ps_game</code> o <code>ps_login</code>.</div>
-                                        <div><b>Service Command</b>: comando principale inviato a <code>PS_GameDefs.dbo.Command</code>; in quick mode, <code>/exp2xenable</code> usa il valore dinamico risolto da DB (es. per giorno corrente da <code>NameDay</code>).</div>
+                                        <div><b>Service Command</b>: comando principale inviato a <code>PSM_Cmd.dbo.usp_RunCommand</code>; in quick mode, <code>/exp2xenable</code> usa il valore dinamico risolto da DB (es. per giorno corrente da <code>NameDay</code>).</div>
                                         <div><b>Second Command (optional)</b>: comando aggiuntivo eseguito subito dopo il principale (tipico <code>/nt ...</code>) con placeholder <code>{day}</code> / <code>{exp}</code>.</div>
                                     </div>
 
