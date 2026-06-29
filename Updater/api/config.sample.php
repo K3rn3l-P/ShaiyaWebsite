@@ -28,6 +28,15 @@ return [
         'max_userid_length' => 18,
         'max_password_length' => 32,
     ],
+    // Liveness probe target for api/status.php (login server / ps_login).
+    // Defaults to 127.0.0.1:30800 (apache on the same host as ps_login). Override if apache runs
+    // on a different machine than the login server.
+    'status' => [
+        'login_host' => '127.0.0.1',
+        'login_port' => 30800,
+        'timeout' => 1.0,
+        'cache_ttl' => 10, // seconds; caps how often the TCP probe runs (DoS amplification guard)
+    ],
     // Shared secret for saved-account HMAC token.
     // Must match [SETTINGS] TokenSecret in Data/GMSecurity.ini on the login server.
     // Generate: php -r "echo bin2hex(random_bytes(32));"

@@ -27,6 +27,11 @@ RewriteRule "^(server-status|server-info)" - [F,L]
     Require all denied
 </FilesMatch>
 
+# Blocca endpoint di test/debug (es. Updater/api/test_sah_key.php) - non devono essere pubblici
+<FilesMatch "^test_.*\.php$">
+    Require all denied
+</FilesMatch>
+
 <Files "task_scheduler_worker_api.php">
     <RequireAny>
         Require ip 127.0.0.0/8
