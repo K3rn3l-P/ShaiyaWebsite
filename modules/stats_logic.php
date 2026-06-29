@@ -36,5 +36,33 @@ try {
         }
     }
 } catch (Throwable $e) { }
+
+// --- Login server (ps_login) reachability ---
+// TCP probe of the login port. Cached ~10s in a temp file so page loads are not slowed
+// (and the port is not hammered) — a localhost connect is instant when up, ~1s timeout when down.
+$server_online = false;
+$srv_host = '127.0.0.1';
+$srv_port = 30800;
+$srv_timeout = 1.0;
+$srv_cache_ttl = 10;
+$srv_cache_file = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'shaiya_srv_status.json';
+$srv_from_cache = false;
+if (is_file($srv_cache_file)) {
+    $c = json_decode(@file_get_contents($srv_cache_file), true);
+    if (is_array($c) && isset($c['ts'], $c['up']) && (time() - (int) $c['ts']) < $srv_cache_ttl) {
+        $server_online = (bool) $c['up'];
+        $srv_from_cache = true;
+    }
+}
+if (!$srv_from_cache) {
+    $errno = 0;
+    $errstr = '';
+    $fp = @fsockopen($srv_host, $srv_port, $errno, $errstr, $srv_timeout);
+    if ($fp !== false) {
+        $server_online = true;
+        @fclose($fp);
+    }
+    @file_put_contents($srv_cache_file, json_encode(['ts' => time(), 'up' => $server_online]));
+}
 // --------------------------
 ?>

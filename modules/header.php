@@ -20,10 +20,30 @@
         <div class="h-stats-online">
             <span><?php echo number_format((int) $online_count); ?></span> <?php echo ($online_count == 1) ? 'Player' : 'Players'; ?> Online
         </div>
+        <div class="h-stats-divider"></div>
+        <div class="h-stats-online h-stats-server" title="<?php echo (!empty($server_online)) ? 'Server online' : 'Server offline'; ?>">
+            Server <span class="srv-dot <?php echo (!empty($server_online)) ? 'srv-on' : 'srv-off'; ?>"></span>
+        </div>
 
     </div>
 
     <style>
+        .h-stats-server { gap: 8px; }
+        .h-stats-server .srv-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+        .h-stats-server .srv-on {
+            background: #5BD17B;
+            box-shadow: 0 0 8px rgba(91, 209, 123, 0.7);
+        }
+        .h-stats-server .srv-off {
+            background: #E0574B;
+            box-shadow: 0 0 8px rgba(224, 87, 75, 0.7);
+        }
+
         .header-btn {
             display: inline-flex;
             align-items: center;
