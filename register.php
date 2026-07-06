@@ -125,6 +125,17 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && $regEnabled == '1') {
                     try {
                         $insert_stmt = $pdoAdmin->prepare("INSERT INTO PS_UserData.dbo.Users_Master (UserID, Enpassword, Email, JoinDate, Admin, AdminLevel, UseQueue, Status, [Leave], LeaveDate, UserType, UserIp, Point, PasswordHashedAt) VALUES (?, ?, ?, GETDATE(), 0, 0, 0, 0, 0, NULL, 'N', ?, 0, GETDATE())");
                         $insert_stmt->execute([$username, $passwordHash, $email, $user_ip]);
+
+                        // Ensure newly registered accounts have the UserMaxGrow row required by the game server
+                        $userUidStmt = $pdoAdmin->prepare("SELECT UserUID FROM PS_UserData.dbo.Users_Master WHERE UserID = ?");
+                        $userUidStmt->execute([$username]);
+                        $userRow = $userUidStmt->fetch(PDO::FETCH_ASSOC);
+                        if ($userRow) {
+                            $userUID = (int) $userRow['UserUID'];
+                            $insert_umg = $pdoAdmin->prepare("INSERT INTO PS_GameData.dbo.UserMaxGrow (ServerID, UserUID, Country, MaxGrow, Del) VALUES (1, ?, 0, 3, 0)");
+                            $insert_umg->execute([$userUID]);
+                        }
+
                         session_regenerate_id(true);
                         $_SESSION['user'] = $username;
                         appRotateCsrfToken();
