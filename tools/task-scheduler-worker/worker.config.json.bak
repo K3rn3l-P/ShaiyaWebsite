@@ -1,0 +1,8 @@
+﻿{
+    "api_url":  "http://127.0.0.1/task_scheduler_worker_api.php",
+    "worker_id":  "worker-main",
+    "hmac_secret":  "d433ed053fd221bbe1d31f4eecce62809a4702a6f5e06c65d604fe07f46f2b4b",
+    "poll_limit":  10,
+    "sql_connection_string":  "Server=127.0.0.1;Database=PS_UserData;User ID=Ernoweb@;Password=9ueRfg8VD*2ce^sWtmMimcVG&d6&SfPpgz^GBr4UjazoW;TrustServerCertificate=True;Encrypt=False;",
+    "command_connection_string":  "Server=127.0.0.1;Database=PSM_Cmd;User ID=ShaiyaTaskAgent;Password=Yve_Br6_PcnwwCxBvwrcjZCSv-Y6+Nf=;TrustServerCertificate=True;Encrypt=False;"
+}
