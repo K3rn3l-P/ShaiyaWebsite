@@ -11,6 +11,7 @@ htdocs
 # ─── Logs (runtime, non tracciare) ───
 config/logs/*
 !config/logs/.gitkeep
+Updater/logs/*
 
 # ─── ZAP home directory: escludere TUTTO runtime ───
 !config/zap-home/security-zap-audit/.gitkeep
