@@ -1,3 +1,7 @@
+# Shaiya Website Fork
+
+This repository is a fork of [Shaiya Website](https://github.com/ashershaiya/ShaiyaWebsite).
+
 # .github Governance (Snello)
 
 Questa cartella è stata razionalizzata per ridurre ridondanza e conflitti tra istruzioni AI.
